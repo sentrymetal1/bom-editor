@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v1.5.2</span> — INCH (L), INCH (W), and FT (W) are now editable dropdowns. Click "Save to Project" to commit pending changes and recalculate totals.
+  <span id="build-tag-display">v1.5</span> — INCH (L), INCH (W), and FT (W) are now editable dropdowns. Click "Save to Project" to commit pending changes and recalculate totals.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -333,7 +333,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v1.5.2 (2026-05-20)";
+const BUILD_TAG = "v1.5 (2026-05-20)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "material-compass";
@@ -627,8 +627,6 @@ async function loadOneLookup(reportName) {
     console.warn('[BOM Editor] Lookup', reportName, 'returned 0 rows');
     return;
   }
-  console.log('[BOM Editor] Lookup', reportName, 'first record shape:', rows[0]);
-
   const displayField = pickDisplayField(rows[0]);
   if (!displayField) {
     console.error('[BOM Editor] Could not auto-detect display field for', reportName, '— record keys:', Object.keys(rows[0]));
@@ -692,11 +690,6 @@ function updateStats() {
 
 function renderGrid() {
   updateStats();
-
-  console.log('[BOM Editor] lookupCache at render:',
-    LOOKUP_INCH, lookupCache[LOOKUP_INCH].optionsList.length, 'options,',
-    LOOKUP_PLATE_FT_W, lookupCache[LOOKUP_PLATE_FT_W].optionsList.length, 'options'
-  );
 
   table = new Tabulator('#bom-table', {
     data: bomData,
