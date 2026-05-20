@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v1.8-test</span> — Form Types only re-routed to All_Form_Types (fresh report). MatType/Spec/Material still empty in this build — isolating the test.
+  <span id="build-tag-display">v1.8</span> — Cascade lookups via getBomEditorLookups Custom API (bypasses widget report-perm wall). Form/MatType/Spec/Material.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -356,7 +356,7 @@ function cellKey(cell) {
 
 const LOOKUP_INCH         = 'All_Length_Inch_Lookups';
 const LOOKUP_PLATE_FT_W   = 'All_Plate_Standard_Sizes';
-const LOOKUP_FORM_TYPE    = 'All_Form_Types';
+const LOOKUP_FORM_TYPE    = 'Form_Types_Report';
 const LOOKUP_MAT_TYPE     = 'Material_Types_Report';
 const LOOKUP_MFD          = 'Material_Form_Detail_Report';
 const LOOKUP_MATERIAL     = 'Beam_Channel_Tee_Lookup_Report';
@@ -881,7 +881,7 @@ async function loadLookups() {
   await Promise.all([
     loadOneLookup(LOOKUP_INCH).catch(err          => console.error('[BOM Editor]', LOOKUP_INCH, 'fetch failed:', err)),
     loadOneLookup(LOOKUP_PLATE_FT_W).catch(err    => console.error('[BOM Editor]', LOOKUP_PLATE_FT_W, 'fetch failed:', err)),
-    loadFormTypes().catch(err                     => console.error('[BOM Editor]', LOOKUP_FORM_TYPE, 'fetch failed:', err)),
+    loadBomEditorLookupsViaCustomApi().catch(err  => console.error('[BOM Editor] getBomEditorLookups fetch failed:', err)),
   ]);
 }
 
