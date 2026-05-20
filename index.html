@@ -455,7 +455,7 @@ async function commitChanges() {
       appName:    APP_NAME,
       reportName: PROJECT_REPORT_NAME,
       id:         projectId,
-      data:       { data: { BOM_Recalc_Trigger: String(Date.now()) } }
+      data:       { data: { BOM_Recalc_Trigger: Math.floor(Date.now() / 1000) % 100000 } }
     });
     if (!resp || (resp.code !== 3000 && !resp.result)) {
       throw new Error('Bad response: ' + JSON.stringify(resp));
