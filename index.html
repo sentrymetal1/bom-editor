@@ -182,6 +182,45 @@
 
   .btn-ghost.active { background: #e8e8e8; border-color: #b0b0b0; }
 
+  .btn-primary {
+    background: #5F94CE;
+    color: #fff;
+    border: 1px solid #4a7eb8;
+  }
+  .btn-primary:hover  { background: #4a7eb8; }
+  .btn-primary:disabled {
+    background: #cdd5df;
+    border-color: #cdd5df;
+    color: #fff;
+    cursor: not-allowed;
+  }
+  .btn-primary .spinner { border-color: rgba(255,255,255,0.4); border-top-color: #fff; }
+
+  .grid-lock {
+    position: fixed;
+    inset: 0;
+    background: rgba(255,255,255,0.55);
+    backdrop-filter: blur(1px);
+    z-index: 9000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    font-size: 13px;
+    color: #1A1D23;
+    font-weight: 500;
+  }
+  .grid-lock.show { display: flex; }
+  .grid-lock .big-spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid #d0d0d0;
+    border-top-color: #5F94CE;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+
   @keyframes flashGreen {
     0%   { background-color: #cdeccd; }
     100% { background-color: transparent; }
@@ -275,6 +314,7 @@
   </div>
   <button class="btn btn-ghost" id="toggle-hide-deleted" title="Hide rows marked for deletion">Hide deleted</button>
   <input type="text" class="filter-input" id="filter-input" placeholder="Filter rows...">
+  <button class="btn btn-primary" id="save-project" disabled title="Commit pending changes and recalculate project totals">Save to Project</button>
 </div>
 
 <div id="loading" class="state-msg"><span class="spinner"></span>Loading BOM rows...</div>
@@ -282,15 +322,21 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  v1.3 — Soft delete (reversible). Editable cells in yellow. Rows edited this session show a blue left edge. Deletes stay reversible until parent save runs the recalc chain (next slice).
+  v1.4 — Click "Save to Project" to commit pending changes and recalculate project totals. Orphan rows marked for delete are hard-deleted at that point; rows with allocated material stay (clear allocations first).
 </div>
 
 <div id="toast" class="toast"></div>
 
+<div id="grid-lock" class="grid-lock">
+  <div class="big-spinner"></div>
+  <div id="grid-lock-msg">Saving to project & recalculating totals…</div>
+</div>
+
 <script>
-const APP_NAME    = "material-compass";
-const REPORT_NAME = "Project_Bill_Of_Material_Detail_Form_Report";
-const PORTAL_BASE = "https://customer.materialcompassportal.com";
+const APP_NAME            = "material-compass";
+const REPORT_NAME         = "Project_Bill_Of_Material_Detail_Form_Report";
+const PROJECT_REPORT_NAME = "MCP_Customer_Project_Form_Report";
+const PORTAL_BASE         = "https://customer.materialcompassportal.com";
 
 let projectId      = null;
 let manufactureId  = null;
@@ -385,6 +431,64 @@ async function refetchAndUpdateRow(row, recordId) {
   updateStats();
 }
 
+function updateSaveButtonState() {
+  const btn = document.getElementById('save-project');
+  const n   = recentlyEdited.size;
+  btn.disabled    = n === 0;
+  btn.textContent = n === 0 ? 'Save to Project' : `Save to Project (${n})`;
+}
+
+async function commitChanges() {
+  if (recentlyEdited.size === 0) return;
+
+  const btn  = document.getElementById('save-project');
+  const lock = document.getElementById('grid-lock');
+  btn.disabled = true;
+  lock.classList.add('show');
+
+  // Snapshot which rows were marked for delete BEFORE the commit,
+  // so we can detect ones that survived (allocations block hard-delete)
+  const beforeMarked = new Set(bomData.filter(r => r.deleted).map(r => r.id));
+
+  try {
+    const resp = await ZOHO.CREATOR.API.updateRecord({
+      appName:    APP_NAME,
+      reportName: PROJECT_REPORT_NAME,
+      id:         projectId,
+      data:       { data: { BOM_Recalc_Trigger: String(Date.now()) } }
+    });
+    if (!resp || (resp.code !== 3000 && !resp.result)) {
+      throw new Error('Bad response: ' + JSON.stringify(resp));
+    }
+
+    // Workflow #9 may have hard-deleted orphans; reload everything.
+    await loadBOM();
+
+    // Detect rows that were marked but survived (allocations blocked delete).
+    const afterMarked = new Set(bomData.filter(r => r.deleted).map(r => r.id));
+    const survived    = [...beforeMarked].filter(id => afterMarked.has(id));
+
+    recentlyEdited.clear();
+    updateSaveButtonState();
+
+    if (survived.length > 0) {
+      showToast(
+        `Saved. ${survived.length} row(s) marked for delete stayed because they have allocated material. Clear allocations first to remove them.`,
+        'success'
+      );
+    } else {
+      showToast('Saved to project. Totals recalculated.', 'success');
+    }
+  } catch (err) {
+    const detail = err?.responseText || err?.message || JSON.stringify(err);
+    showToast('Save to project failed: ' + detail, 'error');
+    console.error('[BOM Editor] commitChanges failed', err);
+    updateSaveButtonState();
+  } finally {
+    lock.classList.remove('show');
+  }
+}
+
 async function toggleDelete(row, makeDeleted) {
   const data    = row.getData();
   const apiVal  = String(makeDeleted);
@@ -412,6 +516,7 @@ async function toggleDelete(row, makeDeleted) {
 
     recentlyEdited.add(data.id);
     row.reformat();
+    updateSaveButtonState();
     flashRow(row, 'success');
     showToast(`${verb} row ${data.lineItem}.`, 'success');
   } catch (err) {
@@ -462,6 +567,7 @@ function makeEditHandler(fieldLinkName, dataKey, opts) {
 
       recentlyEdited.add(data.id);
       row.reformat();
+      updateSaveButtonState();
       flashRow(row, 'success');
       showToast(`Saved ${opts.label || fieldLinkName} on row ${data.lineItem}.`, 'success');
     } catch (err) {
@@ -624,6 +730,8 @@ document.getElementById('toggle-hide-deleted').addEventListener('click', (e) => 
   e.currentTarget.classList.toggle('active', hideDeleted);
   applyAllFilters();
 });
+
+document.getElementById('save-project').addEventListener('click', commitChanges);
 
 document.getElementById('back').addEventListener('click', () => {
   const url = `${PORTAL_BASE}/#Page:Project_Dashboard?project_id=${projectId}`;
