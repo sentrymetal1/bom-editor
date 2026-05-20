@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v1.5</span> — INCH (L), INCH (W), and FT (W) are now editable dropdowns. Click "Save to Project" to commit pending changes and recalculate totals.
+  <span id="build-tag-display">v1.5.1</span> — INCH (L), INCH (W), and FT (W) are now editable dropdowns. Click "Save to Project" to commit pending changes and recalculate totals.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -333,7 +333,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v1.5 (2026-05-20)";
+const BUILD_TAG = "v1.5.1 (2026-05-20)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "material-compass";
@@ -721,19 +721,19 @@ function renderGrid() {
       {title: 'INCH (L)', field: 'inchL',     width: 85,
         formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
         editor: 'list',
-        editorParams: {values: () => lookupCache[LOOKUP_INCH].options, autocomplete: true, listOnEmpty: true, sort: 'asc'},
+        editorParams: {values: () => lookupCache[LOOKUP_INCH].options},
         cellEdited: makeEditHandler('Length_INCH', 'inchL', {label: 'INCH (L)'}),
         cssClass: 'editable-cell'},
       {title: 'FT (W)',   field: 'ftW',       width: 65,
         formatter: (cell) => lookupCache[LOOKUP_PLATE_FT_W].byId[cell.getValue()] || '',
         editor: 'list',
-        editorParams: {values: () => lookupCache[LOOKUP_PLATE_FT_W].options, autocomplete: true, listOnEmpty: true, sort: 'asc'},
+        editorParams: {values: () => lookupCache[LOOKUP_PLATE_FT_W].options},
         cellEdited: makeEditHandler('Width_FT', 'ftW', {label: 'FT (W)'}),
         cssClass: 'editable-cell'},
       {title: 'INCH (W)', field: 'inchW',     width: 85,
         formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
         editor: 'list',
-        editorParams: {values: () => lookupCache[LOOKUP_INCH].options, autocomplete: true, listOnEmpty: true, sort: 'asc'},
+        editorParams: {values: () => lookupCache[LOOKUP_INCH].options},
         cellEdited: makeEditHandler('Width_INCH', 'inchW', {label: 'INCH (W)'}),
         cssClass: 'editable-cell'},
       {title: 'Unit WT',  field: 'unitWt',    width: 85,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
