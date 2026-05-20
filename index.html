@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v1.6</span> — Form / Mat Type / Spec / Material are now cascading dropdowns. Changing an upstream field clears the downstream ones.
+  <span id="build-tag-display">v1.6.1</span> — Hotfix: failed saves no longer recurse / hammer the API. Form/MatType/Spec/Material cascade dropdowns.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -333,7 +333,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v1.6 (2026-05-20)";
+const BUILD_TAG = "v1.6.1 (2026-05-20)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "material-compass";
@@ -348,6 +348,11 @@ let table          = null;
 let currentView    = 'flat';
 let hideDeleted    = false;
 const recentlyEdited = new Set();
+const pendingCells   = new Set();
+
+function cellKey(cell) {
+  return cell.getRow().getData().id + '|' + cell.getColumn().getField();
+}
 
 const LOOKUP_INCH         = 'All_Length_Inch_Lookups';
 const LOOKUP_PLATE_FT_W   = 'All_Plate_Standard_Sizes';
@@ -565,20 +570,22 @@ async function toggleDelete(row, makeDeleted) {
 function makeEditHandler(fieldLinkName, dataKey, opts) {
   opts = opts || {};
   return async function(cell) {
+    const key = cellKey(cell);
+    if (pendingCells.has(key)) return;
     const row    = cell.getRow();
     const data   = row.getData();
-    const rawNew = cell.getValue();
-    const rawOld = cell.getOldValue();
+    const rawNew = cell.getValue() ?? '';
+    const rawOld = cell.getOldValue() ?? '';
     if (rawNew === rawOld) return;
 
     if (opts.validate && !opts.validate(rawNew)) {
-      cell.setValue(rawOld, true);
-      showToast('Invalid value for ' + (opts.label || fieldLinkName) + '.', 'error');
+      showToast('Invalid value for ' + (opts.label || fieldLinkName) + '. Row not saved — re-edit to fix.', 'error');
       flashRow(row, 'error');
       return;
     }
 
     const apiValue = opts.toApi ? opts.toApi(rawNew) : rawNew;
+    pendingCells.add(key);
 
     try {
       const resp = await ZOHO.CREATOR.API.updateRecord({
@@ -606,11 +613,12 @@ function makeEditHandler(fieldLinkName, dataKey, opts) {
       flashRow(row, 'success');
       showToast(`Saved ${opts.label || fieldLinkName} on row ${data.lineItem}.`, 'success');
     } catch (err) {
-      cell.setValue(rawOld, true);
       flashRow(row, 'error');
       const detail = err?.responseText || err?.message || JSON.stringify(err);
-      showToast('Save failed: ' + detail, 'error');
+      showToast('Save failed: ' + detail + ' — re-edit to retry.', 'error');
       console.error('[BOM Editor] updateRecord failed', err);
+    } finally {
+      pendingCells.delete(key);
     }
   };
 }
@@ -618,10 +626,12 @@ function makeEditHandler(fieldLinkName, dataKey, opts) {
 function makeCascadeEditHandler(fieldLinkName, dataKey, downstream, opts) {
   opts = opts || {};
   return async function(cell) {
+    const key = cellKey(cell);
+    if (pendingCells.has(key)) return;
     const row    = cell.getRow();
     const data   = row.getData();
-    const rawNew = cell.getValue();
-    const rawOld = cell.getOldValue();
+    const rawNew = cell.getValue() ?? '';
+    const rawOld = cell.getOldValue() ?? '';
     if (rawNew === rawOld) return;
 
     const payload = { [fieldLinkName]: rawNew || '' };
@@ -633,6 +643,7 @@ function makeCascadeEditHandler(fieldLinkName, dataKey, downstream, opts) {
       }
     }
 
+    pendingCells.add(key);
     try {
       const resp = await ZOHO.CREATOR.API.updateRecord({
         appName:    APP_NAME,
@@ -666,11 +677,12 @@ function makeCascadeEditHandler(fieldLinkName, dataKey, downstream, opts) {
       const tail = clearedDataKeys.length ? ` (cleared ${clearedDataKeys.length} downstream field${clearedDataKeys.length>1?'s':''})` : '';
       showToast(`Saved ${opts.label || fieldLinkName} on row ${data.lineItem}${tail}.`, 'success');
     } catch (err) {
-      cell.setValue(rawOld, true);
       flashRow(row, 'error');
       const detail = err?.responseText || err?.message || JSON.stringify(err);
-      showToast('Save failed: ' + detail, 'error');
+      showToast('Save failed: ' + detail + ' — re-edit to retry.', 'error');
       console.error('[BOM Editor] cascade updateRecord failed', err);
+    } finally {
+      pendingCells.delete(key);
     }
   };
 }
