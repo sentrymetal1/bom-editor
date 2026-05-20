@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  v1.4 — Click "Save to Project" to commit pending changes and recalculate project totals. Orphan rows marked for delete are hard-deleted at that point; rows with allocated material stay (clear allocations first).
+  <span id="build-tag-display">v1.4-d3</span> — Click "Save to Project" to commit pending changes and recalculate project totals. Orphan rows marked for delete are hard-deleted at that point; rows with allocated material stay (clear allocations first).
 </div>
 
 <div id="toast" class="toast"></div>
@@ -333,6 +333,9 @@
 </div>
 
 <script>
+const BUILD_TAG = "v1.4-d3 (2026-05-20)";
+console.log('[BOM Editor] build:', BUILD_TAG);
+
 const APP_NAME            = "material-compass";
 const REPORT_NAME         = "Project_Bill_Of_Material_Detail_Form_Report";
 const PROJECT_REPORT_NAME = "All_Mcp_customer_Projects";
