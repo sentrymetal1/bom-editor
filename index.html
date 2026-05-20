@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v1.5</span> — INCH (L), INCH (W), and FT (W) are now editable dropdowns. Click "Save to Project" to commit pending changes and recalculate totals.
+  <span id="build-tag-display">v1.6</span> — Form / Mat Type / Spec / Material are now cascading dropdowns. Changing an upstream field clears the downstream ones.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -333,7 +333,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v1.5 (2026-05-20)";
+const BUILD_TAG = "v1.6 (2026-05-20)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "material-compass";
@@ -351,9 +351,17 @@ const recentlyEdited = new Set();
 
 const LOOKUP_INCH         = 'All_Length_Inch_Lookups';
 const LOOKUP_PLATE_FT_W   = 'All_Plate_Standard_Sizes';
+const LOOKUP_FORM_TYPE    = 'Form_Types_Report';
+const LOOKUP_MAT_TYPE     = 'Material_Types_Report';
+const LOOKUP_MFD          = 'Material_Form_Detail_Report';
+const LOOKUP_MATERIAL     = 'Beam_Channel_Tee_Lookup_Report';
 const lookupCache = {
   [LOOKUP_INCH]:       { byId: {}, displayField: null, optionsList: [] },
   [LOOKUP_PLATE_FT_W]: { byId: {}, displayField: null, optionsList: [] },
+  [LOOKUP_FORM_TYPE]:  { byId: {}, optionsList: [] },
+  [LOOKUP_MAT_TYPE]:   { byId: {}, optionsList: [] },
+  [LOOKUP_MFD]:        { byId: {}, records: [] },
+  [LOOKUP_MATERIAL]:   { byId: {}, records: [] },
 };
 
 const SYSTEM_FIELD_PREFIXES = ['ID', 'Added_Time', 'Added_User', 'Modified_Time', 'Modified_User', 'zc_'];
@@ -394,10 +402,10 @@ function mapRecord(r, idx) {
     tag:          r.BOM_Item || '',
     component:    lookupDisplay(r.Component),
     drawing:      lookupDisplay(r.Scope_LU),
-    formType:     lookupDisplay(r.Form_Type),
-    matType:      lookupDisplay(r.Material_Type),
-    spec:         lookupDisplay(r.Specification),
-    material:     lookupDisplay(r.Material),
+    formType:     readLookupId(r.Form_Type),
+    matType:      readLookupId(r.Material_Type),
+    spec:         readLookupId(r.Specification),
+    material:     readLookupId(r.Material),
     qty:          Number(r.Quantity) || 0,
     ftL:          Number(r.Length_FT) || 0,
     inchL:        readLookupId(r.Length_INCH),
@@ -607,6 +615,66 @@ function makeEditHandler(fieldLinkName, dataKey, opts) {
   };
 }
 
+function makeCascadeEditHandler(fieldLinkName, dataKey, downstream, opts) {
+  opts = opts || {};
+  return async function(cell) {
+    const row    = cell.getRow();
+    const data   = row.getData();
+    const rawNew = cell.getValue();
+    const rawOld = cell.getOldValue();
+    if (rawNew === rawOld) return;
+
+    const payload = { [fieldLinkName]: rawNew || '' };
+    const clearedDataKeys = [];
+    for (const ds of downstream) {
+      if (data[ds.dataKey]) {
+        payload[ds.fieldLinkName] = '';
+        clearedDataKeys.push(ds.dataKey);
+      }
+    }
+
+    try {
+      const resp = await ZOHO.CREATOR.API.updateRecord({
+        appName:    APP_NAME,
+        reportName: REPORT_NAME,
+        id:         data.id,
+        data:       { data: payload }
+      });
+      if (!resp || (resp.code !== 3000 && !resp.result)) {
+        throw new Error('Bad response: ' + JSON.stringify(resp));
+      }
+
+      try {
+        await refetchAndUpdateRow(row, data.id);
+      } catch (refetchErr) {
+        console.warn('[BOM Editor] Save OK but refetch failed:', refetchErr);
+        const item = bomData.find(r => r.id === data.id);
+        if (item) {
+          item[dataKey] = rawNew;
+          for (const k of clearedDataKeys) item[k] = '';
+        }
+        const localPatch = {[dataKey]: rawNew};
+        for (const k of clearedDataKeys) localPatch[k] = '';
+        row.update(localPatch);
+        updateStats();
+      }
+
+      recentlyEdited.add(data.id);
+      row.reformat();
+      updateSaveButtonState();
+      flashRow(row, 'success');
+      const tail = clearedDataKeys.length ? ` (cleared ${clearedDataKeys.length} downstream field${clearedDataKeys.length>1?'s':''})` : '';
+      showToast(`Saved ${opts.label || fieldLinkName} on row ${data.lineItem}${tail}.`, 'success');
+    } catch (err) {
+      cell.setValue(rawOld, true);
+      flashRow(row, 'error');
+      const detail = err?.responseText || err?.message || JSON.stringify(err);
+      showToast('Save failed: ' + detail, 'error');
+      console.error('[BOM Editor] cascade updateRecord failed', err);
+    }
+  };
+}
+
 function showError(msg, err) {
   document.getElementById('loading').style.display = 'none';
   document.getElementById('bom-table').style.display = 'none';
@@ -647,10 +715,97 @@ async function loadOneLookup(reportName) {
   cache.optionsList.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
 }
 
+async function fetchAllPages(reportName, criteria) {
+  const all = [];
+  let page = 1;
+  const pageSize = 1000;
+  while (true) {
+    const params = { appName: APP_NAME, reportName: reportName, page: page, pageSize: pageSize };
+    if (criteria) params.criteria = criteria;
+    const resp = await ZOHO.CREATOR.API.getAllRecords(params);
+    const rows = Array.isArray(resp?.data) ? resp.data : Array.isArray(resp) ? resp : [];
+    if (rows.length === 0) break;
+    all.push(...rows);
+    if (rows.length < pageSize) break;
+    page += 1;
+    if (page > 50) {
+      console.warn('[BOM Editor] fetchAllPages safety stop at page 50 for', reportName);
+      break;
+    }
+  }
+  return all;
+}
+
+async function loadFormTypes() {
+  const rows = await fetchAllPages(LOOKUP_FORM_TYPE, 'Active == true');
+  const cache = lookupCache[LOOKUP_FORM_TYPE];
+  cache.byId = {};
+  cache.optionsList = [];
+  for (const r of rows) {
+    const id  = String(r.ID);
+    const lbl = String(r.Form_Type ?? '');
+    cache.byId[id] = lbl;
+    cache.optionsList.push({label: lbl, value: id});
+  }
+  cache.optionsList.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
+  console.log('[BOM Editor]', LOOKUP_FORM_TYPE, '→', cache.optionsList.length, 'active form types');
+}
+
+async function loadMaterialTypes() {
+  const rows = await fetchAllPages(LOOKUP_MAT_TYPE);
+  const cache = lookupCache[LOOKUP_MAT_TYPE];
+  cache.byId = {};
+  cache.optionsList = [];
+  for (const r of rows) {
+    const id  = String(r.ID);
+    const lbl = String(r.Material_Type ?? '');
+    cache.byId[id] = lbl;
+    cache.optionsList.push({label: lbl, value: id});
+  }
+  cache.optionsList.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
+  console.log('[BOM Editor]', LOOKUP_MAT_TYPE, '→', cache.optionsList.length, 'material types');
+}
+
+async function loadMaterialFormDetail() {
+  const rows = await fetchAllPages(LOOKUP_MFD);
+  const cache = lookupCache[LOOKUP_MFD];
+  cache.byId    = {};
+  cache.records = [];
+  for (const r of rows) {
+    const id         = String(r.ID);
+    const formTypeId = readLookupId(r.Form_Type);
+    const matTypeId  = readLookupId(r.Material_Type);
+    const typeDetail = String(r.Type_Detail ?? '');
+    cache.byId[id] = typeDetail;
+    cache.records.push({id, formTypeId, matTypeId, typeDetail});
+  }
+  console.log('[BOM Editor]', LOOKUP_MFD, '→', cache.records.length, 'spec combos');
+}
+
+async function loadMaterialCatalog() {
+  const rows = await fetchAllPages(LOOKUP_MATERIAL);
+  const cache = lookupCache[LOOKUP_MATERIAL];
+  cache.byId    = {};
+  cache.records = [];
+  for (const r of rows) {
+    const id          = String(r.ID);
+    const formTypeId  = readLookupId(r.Form_Types);
+    const matTypeId   = readLookupId(r.Material_Types);
+    const description = String(r.Description ?? '');
+    cache.byId[id] = description;
+    cache.records.push({id, formTypeId, matTypeId, description});
+  }
+  console.log('[BOM Editor]', LOOKUP_MATERIAL, '→', cache.records.length, 'material rows');
+}
+
 async function loadLookups() {
   await Promise.all([
     loadOneLookup(LOOKUP_INCH).catch(err => console.error('[BOM Editor]', LOOKUP_INCH, 'fetch failed:', err)),
     loadOneLookup(LOOKUP_PLATE_FT_W).catch(err => console.error('[BOM Editor]', LOOKUP_PLATE_FT_W, 'fetch failed:', err)),
+    loadFormTypes().catch(err            => console.error('[BOM Editor]', LOOKUP_FORM_TYPE, 'fetch failed:', err)),
+    loadMaterialTypes().catch(err        => console.error('[BOM Editor]', LOOKUP_MAT_TYPE, 'fetch failed:', err)),
+    loadMaterialFormDetail().catch(err   => console.error('[BOM Editor]', LOOKUP_MFD, 'fetch failed:', err)),
+    loadMaterialCatalog().catch(err      => console.error('[BOM Editor]', LOOKUP_MATERIAL, 'fetch failed:', err)),
   ]);
 }
 
@@ -705,10 +860,73 @@ function renderGrid() {
         cssClass: 'editable-cell'},
       {title: 'Component',field: 'component', width: 130, formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
       {title: 'Drawing',  field: 'drawing',   width: 130, formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
-      {title: 'Form',     field: 'formType',  width: 95,  formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
-      {title: 'Mat Type', field: 'matType',   width: 125, formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
-      {title: 'Spec',     field: 'spec',      width: 105, formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
-      {title: 'Material', field: 'material',  width: 195, formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
+      {title: 'Form',     field: 'formType',  width: 110,
+        formatter: (c) => {
+          const lbl = lookupCache[LOOKUP_FORM_TYPE].byId[c.getValue()] || '';
+          return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
+        },
+        editor: 'list',
+        editorParams: {values: lookupCache[LOOKUP_FORM_TYPE].optionsList, autocomplete: true, listOnEmpty: true},
+        cellEdited: makeCascadeEditHandler('Form_Type', 'formType', [
+          {dataKey: 'matType',  fieldLinkName: 'Material_Type'},
+          {dataKey: 'spec',     fieldLinkName: 'Specification'},
+          {dataKey: 'material', fieldLinkName: 'Material'},
+        ], {label: 'Form'}),
+        cssClass: 'editable-cell'},
+      {title: 'Mat Type', field: 'matType',   width: 140,
+        formatter: (c) => {
+          const lbl = lookupCache[LOOKUP_MAT_TYPE].byId[c.getValue()] || '';
+          return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
+        },
+        editor: 'list',
+        editorParams: {values: lookupCache[LOOKUP_MAT_TYPE].optionsList, autocomplete: true, listOnEmpty: true},
+        cellEdited: makeCascadeEditHandler('Material_Type', 'matType', [
+          {dataKey: 'spec',     fieldLinkName: 'Specification'},
+          {dataKey: 'material', fieldLinkName: 'Material'},
+        ], {label: 'Mat Type'}),
+        cssClass: 'editable-cell'},
+      {title: 'Spec',     field: 'spec',      width: 115,
+        formatter: (c) => {
+          const lbl = lookupCache[LOOKUP_MFD].byId[c.getValue()] || '';
+          return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
+        },
+        editor: 'list',
+        editorParams: {
+          autocomplete: true,
+          listOnEmpty: true,
+          values: function(cell) {
+            const d = cell.getRow().getData();
+            if (!d.formType || !d.matType) return [];
+            const opts = lookupCache[LOOKUP_MFD].records
+              .filter(r => r.formTypeId === d.formType && r.matTypeId === d.matType)
+              .map(r => ({label: r.typeDetail, value: r.id}));
+            opts.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
+            return opts;
+          }
+        },
+        cellEdited: makeCascadeEditHandler('Specification', 'spec', [], {label: 'Spec'}),
+        cssClass: 'editable-cell'},
+      {title: 'Material', field: 'material',  width: 210,
+        formatter: (c) => {
+          const lbl = lookupCache[LOOKUP_MATERIAL].byId[c.getValue()] || '';
+          return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
+        },
+        editor: 'list',
+        editorParams: {
+          autocomplete: true,
+          listOnEmpty: true,
+          values: function(cell) {
+            const d = cell.getRow().getData();
+            if (!d.formType || !d.matType) return [];
+            const opts = lookupCache[LOOKUP_MATERIAL].records
+              .filter(r => r.formTypeId === d.formType && r.matTypeId === d.matType)
+              .map(r => ({label: r.description, value: r.id}));
+            opts.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
+            return opts;
+          }
+        },
+        cellEdited: makeCascadeEditHandler('Material', 'material', [], {label: 'Material'}),
+        cssClass: 'editable-cell'},
       {title: 'QTY',      field: 'qty',       width: 65,  hozAlign: 'right',
         editor: 'number', editorParams: {min: 0, step: 1},
         cellEdited: makeEditHandler('Quantity', 'qty', {label: 'QTY', validate: nonNegNumber}),
