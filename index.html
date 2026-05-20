@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v1.4</span> — Click "Save to Project" to commit pending changes and recalculate project totals. Orphan rows marked for delete are hard-deleted at that point; rows with allocated material stay (clear allocations first).
+  <span id="build-tag-display">v1.5</span> — INCH (L), INCH (W), and FT (W) are now editable dropdowns. Click "Save to Project" to commit pending changes and recalculate totals.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -333,7 +333,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v1.4 (2026-05-20)";
+const BUILD_TAG = "v1.5 (2026-05-20)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "material-compass";
@@ -348,6 +348,30 @@ let table          = null;
 let currentView    = 'flat';
 let hideDeleted    = false;
 const recentlyEdited = new Set();
+
+const LOOKUP_INCH         = 'All_Length_Inch_Lookups';
+const LOOKUP_PLATE_FT_W   = 'All_Plate_Standard_Sizes';
+const lookupCache = {
+  [LOOKUP_INCH]:       { byId: {}, displayField: null, options: {} },
+  [LOOKUP_PLATE_FT_W]: { byId: {}, displayField: null, options: {} },
+};
+
+const SYSTEM_FIELD_PREFIXES = ['ID', 'Added_Time', 'Added_User', 'Modified_Time', 'Modified_User', 'zc_'];
+function pickDisplayField(record) {
+  for (const key of Object.keys(record)) {
+    if (SYSTEM_FIELD_PREFIXES.some(p => key === p || key.startsWith(p))) continue;
+    const val = record[key];
+    if (typeof val === 'string' && val.trim() !== '') return key;
+    if (typeof val === 'number') return key;
+  }
+  return null;
+}
+
+function readLookupId(field) {
+  if (field === null || field === undefined || field === '') return '';
+  if (typeof field === 'object') return String(field.ID || field.id || '');
+  return String(field);
+}
 
 function lookupDisplay(v) {
   if (v === null || v === undefined) return '';
@@ -376,9 +400,9 @@ function mapRecord(r, idx) {
     material:     lookupDisplay(r.Material),
     qty:          Number(r.Quantity) || 0,
     ftL:          Number(r.Length_FT) || 0,
-    inchL:        lookupDisplay(r.Length_INCH) || '0',
-    ftW:          lookupDisplay(r.Width_FT) || '0',
-    inchW:        lookupDisplay(r.Width_INCH) || '0',
+    inchL:        readLookupId(r.Length_INCH),
+    ftW:          readLookupId(r.Width_FT),
+    inchW:        readLookupId(r.Width_INCH),
     materialDesc: r.Material_Description_And_Dimension || '',
     unitWt:       Number(r.Unit_Weight) || 0,
     totWt:        Number(r.CalcWeight) || 0,
@@ -592,14 +616,56 @@ function showError(msg, err) {
   console.error('[BOM Editor]', msg, err);
 }
 
+async function loadOneLookup(reportName) {
+  const resp = await ZOHO.CREATOR.API.getAllRecords({
+    appName:    APP_NAME,
+    reportName: reportName,
+    pageSize:   200
+  });
+  const rows = Array.isArray(resp?.data) ? resp.data : Array.isArray(resp) ? resp : [];
+  if (rows.length === 0) {
+    console.warn('[BOM Editor] Lookup', reportName, 'returned 0 rows');
+    return;
+  }
+  console.log('[BOM Editor] Lookup', reportName, 'first record shape:', rows[0]);
+
+  const displayField = pickDisplayField(rows[0]);
+  if (!displayField) {
+    console.error('[BOM Editor] Could not auto-detect display field for', reportName, '— record keys:', Object.keys(rows[0]));
+    return;
+  }
+  console.log('[BOM Editor] Lookup', reportName, 'using display field:', displayField);
+
+  const cache = lookupCache[reportName];
+  cache.displayField = displayField;
+  cache.byId    = {};
+  cache.options = {};
+  for (const r of rows) {
+    const id  = String(r.ID);
+    const lbl = String(r[displayField] ?? '');
+    cache.byId[id]    = lbl;
+    cache.options[id] = lbl;
+  }
+}
+
+async function loadLookups() {
+  await Promise.all([
+    loadOneLookup(LOOKUP_INCH).catch(err => console.error('[BOM Editor]', LOOKUP_INCH, 'fetch failed:', err)),
+    loadOneLookup(LOOKUP_PLATE_FT_W).catch(err => console.error('[BOM Editor]', LOOKUP_PLATE_FT_W, 'fetch failed:', err)),
+  ]);
+}
+
 async function loadBOM() {
   try {
-    const resp = await ZOHO.CREATOR.API.getAllRecords({
-      appName:    APP_NAME,
-      reportName: REPORT_NAME,
-      criteria:   `MCP_Customer_Project_Form == ${projectId}`,
-      pageSize:   200
-    });
+    const [resp] = await Promise.all([
+      ZOHO.CREATOR.API.getAllRecords({
+        appName:    APP_NAME,
+        reportName: REPORT_NAME,
+        criteria:   `MCP_Customer_Project_Form == ${projectId}`,
+        pageSize:   200
+      }),
+      loadLookups()
+    ]);
 
     const rows = Array.isArray(resp?.data) ? resp.data
               : Array.isArray(resp)        ? resp
@@ -652,9 +718,24 @@ function renderGrid() {
         editor: 'number', editorParams: {min: 0, step: 1},
         cellEdited: makeEditHandler('Length_FT', 'ftL', {label: 'FT (L)', validate: nonNegNumber}),
         cssClass: 'editable-cell'},
-      {title: 'INCH (L)', field: 'inchL',     width: 85},
-      {title: 'FT (W)',   field: 'ftW',       width: 65},
-      {title: 'INCH (W)', field: 'inchW',     width: 85},
+      {title: 'INCH (L)', field: 'inchL',     width: 85,
+        formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
+        editor: 'list',
+        editorParams: {values: () => lookupCache[LOOKUP_INCH].options, autocomplete: true, listOnEmpty: true, sort: 'asc'},
+        cellEdited: makeEditHandler('Length_INCH', 'inchL', {label: 'INCH (L)'}),
+        cssClass: 'editable-cell'},
+      {title: 'FT (W)',   field: 'ftW',       width: 65,
+        formatter: (cell) => lookupCache[LOOKUP_PLATE_FT_W].byId[cell.getValue()] || '',
+        editor: 'list',
+        editorParams: {values: () => lookupCache[LOOKUP_PLATE_FT_W].options, autocomplete: true, listOnEmpty: true, sort: 'asc'},
+        cellEdited: makeEditHandler('Width_FT', 'ftW', {label: 'FT (W)'}),
+        cssClass: 'editable-cell'},
+      {title: 'INCH (W)', field: 'inchW',     width: 85,
+        formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
+        editor: 'list',
+        editorParams: {values: () => lookupCache[LOOKUP_INCH].options, autocomplete: true, listOnEmpty: true, sort: 'asc'},
+        cellEdited: makeEditHandler('Width_INCH', 'inchW', {label: 'INCH (W)'}),
+        cssClass: 'editable-cell'},
       {title: 'Unit WT',  field: 'unitWt',    width: 85,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Tot WT',   field: 'totWt',     width: 95,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Area',     field: 'area',      width: 75,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
