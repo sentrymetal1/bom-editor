@@ -156,19 +156,6 @@
     cursor: pointer;
   }
   .tabulator-cell.editable-cell:hover { background: #fff1a8; }
-  .tabulator-cell.editable-cell::after {
-    content: '';
-    position: absolute;
-    right: 4px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 4px solid #b59a3e;
-    opacity: 0.5;
-  }
 
   @keyframes flashGreen {
     0%   { background-color: #cdeccd; }
@@ -269,7 +256,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  v1.1 — Quantity editable (click any yellow cell). Other fields read-only for now.
+  v1.2 — Editable cells (yellow): Tag, QTY, FT (L), SA, Galv. Stats refresh after each save. Lookups & dimensions next.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -345,43 +332,78 @@ function flashRow(row, kind) {
   el.classList.add(kind === 'error' ? 'flash-error' : 'flash-success');
 }
 
-async function onQtyEdited(cell) {
-  const row    = cell.getRow();
-  const data   = row.getData();
-  const newQty = Number(cell.getValue());
-  const oldQty = Number(cell.getOldValue());
+const nonNegNumber = v => Number.isFinite(Number(v)) && Number(v) >= 0;
+const boolToApi    = v => String(Boolean(v));
 
-  if (newQty === oldQty) return;
-  if (!Number.isFinite(newQty) || newQty < 0) {
-    cell.setValue(oldQty, true);
-    showToast('Quantity must be a non-negative number.', 'error');
-    flashRow(row, 'error');
-    return;
+async function refetchAndUpdateRow(row, recordId) {
+  const resp = await ZOHO.CREATOR.API.getRecordById({
+    appName:    APP_NAME,
+    reportName: REPORT_NAME,
+    id:         recordId
+  });
+  if (!resp || (resp.code !== 3000 && !resp.data)) {
+    throw new Error('Bad refetch response: ' + JSON.stringify(resp));
   }
+  const recordData = resp.data;
+  if (!recordData || typeof recordData !== 'object') {
+    throw new Error('Unexpected getRecordById data: ' + JSON.stringify(resp));
+  }
+  const lineItem = row.getData().lineItem;
+  const fresh    = mapRecord(recordData, lineItem - 1);
+  const idx      = bomData.findIndex(r => r.id === recordId);
+  if (idx >= 0) bomData[idx] = fresh;
+  row.update(fresh);
+  updateStats();
+}
 
-  try {
-    const resp = await ZOHO.CREATOR.API.updateRecord({
-      appName:    APP_NAME,
-      reportName: REPORT_NAME,
-      id:         data.id,
-      data:       { data: { Quantity: newQty } }
-    });
-    if (!resp || (resp.code !== 3000 && !resp.result)) {
-      throw new Error('Bad response: ' + JSON.stringify(resp));
+function makeEditHandler(fieldLinkName, dataKey, opts) {
+  opts = opts || {};
+  return async function(cell) {
+    const row    = cell.getRow();
+    const data   = row.getData();
+    const rawNew = cell.getValue();
+    const rawOld = cell.getOldValue();
+    if (rawNew === rawOld) return;
+
+    if (opts.validate && !opts.validate(rawNew)) {
+      cell.setValue(rawOld, true);
+      showToast('Invalid value for ' + (opts.label || fieldLinkName) + '.', 'error');
+      flashRow(row, 'error');
+      return;
     }
 
-    const item = bomData.find(r => r.id === data.id);
-    if (item) item.qty = newQty;
-    updateStats();
-    flashRow(row, 'success');
-    showToast(`Saved QTY = ${newQty} on row ${data.lineItem}.`, 'success');
-  } catch (err) {
-    cell.setValue(oldQty, true);
-    flashRow(row, 'error');
-    const detail = err?.responseText || err?.message || JSON.stringify(err);
-    showToast('Save failed: ' + detail, 'error');
-    console.error('[BOM Editor] updateRecord failed', err);
-  }
+    const apiValue = opts.toApi ? opts.toApi(rawNew) : rawNew;
+
+    try {
+      const resp = await ZOHO.CREATOR.API.updateRecord({
+        appName:    APP_NAME,
+        reportName: REPORT_NAME,
+        id:         data.id,
+        data:       { data: { [fieldLinkName]: apiValue } }
+      });
+      if (!resp || (resp.code !== 3000 && !resp.result)) {
+        throw new Error('Bad response: ' + JSON.stringify(resp));
+      }
+
+      try {
+        await refetchAndUpdateRow(row, data.id);
+      } catch (refetchErr) {
+        console.warn('[BOM Editor] Save OK but refetch failed:', refetchErr);
+        const item = bomData.find(r => r.id === data.id);
+        if (item) item[dataKey] = rawNew;
+        updateStats();
+      }
+
+      flashRow(row, 'success');
+      showToast(`Saved ${opts.label || fieldLinkName} on row ${data.lineItem}.`, 'success');
+    } catch (err) {
+      cell.setValue(rawOld, true);
+      flashRow(row, 'error');
+      const detail = err?.responseText || err?.message || JSON.stringify(err);
+      showToast('Save failed: ' + detail, 'error');
+      console.error('[BOM Editor] updateRecord failed', err);
+    }
+  };
 }
 
 function showError(msg, err) {
@@ -435,7 +457,10 @@ function renderGrid() {
     rowHeight: 34,
     columns: [
       {title: '#',        field: 'lineItem',  width: 50,  hozAlign: 'center', frozen: true},
-      {title: 'Tag',      field: 'tag',       width: 110, frozen: true},
+      {title: 'Tag',      field: 'tag',       width: 110, frozen: true,
+        editor: 'input',
+        cellEdited: makeEditHandler('BOM_Item', 'tag', {label: 'Tag'}),
+        cssClass: 'editable-cell'},
       {title: 'Component',field: 'component', width: 130, formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
       {title: 'Drawing',  field: 'drawing',   width: 130, formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
       {title: 'Form',     field: 'formType',  width: 95,  formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
@@ -444,17 +469,26 @@ function renderGrid() {
       {title: 'Material', field: 'material',  width: 195, formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
       {title: 'QTY',      field: 'qty',       width: 65,  hozAlign: 'right',
         editor: 'number', editorParams: {min: 0, step: 1},
-        cellEdited: onQtyEdited,
+        cellEdited: makeEditHandler('Quantity', 'qty', {label: 'QTY', validate: nonNegNumber}),
         cssClass: 'editable-cell'},
-      {title: 'FT (L)',   field: 'ftL',       width: 65,  hozAlign: 'right'},
+      {title: 'FT (L)',   field: 'ftL',       width: 65,  hozAlign: 'right',
+        editor: 'number', editorParams: {min: 0, step: 1},
+        cellEdited: makeEditHandler('Length_FT', 'ftL', {label: 'FT (L)', validate: nonNegNumber}),
+        cssClass: 'editable-cell'},
       {title: 'INCH (L)', field: 'inchL',     width: 85},
       {title: 'FT (W)',   field: 'ftW',       width: 65},
       {title: 'INCH (W)', field: 'inchW',     width: 85},
       {title: 'Unit WT',  field: 'unitWt',    width: 85,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Tot WT',   field: 'totWt',     width: 95,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Area',     field: 'area',      width: 75,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
-      {title: 'SA',       field: 'sa',        width: 45,  hozAlign: 'center', formatter: 'tickCross'},
-      {title: 'Galv',     field: 'galv',      width: 50,  hozAlign: 'center', formatter: 'tickCross'},
+      {title: 'SA',       field: 'sa',        width: 45,  hozAlign: 'center', formatter: 'tickCross',
+        editor: 'tickCross',
+        cellEdited: makeEditHandler('Plate_SA', 'sa', {label: 'SA', toApi: boolToApi}),
+        cssClass: 'editable-cell'},
+      {title: 'Galv',     field: 'galv',      width: 50,  hozAlign: 'center', formatter: 'tickCross',
+        editor: 'tickCross',
+        cellEdited: makeEditHandler('Galv', 'galv', {label: 'Galv', toApi: boolToApi}),
+        cssClass: 'editable-cell'},
       {title: 'Galv LB',  field: 'galvLb',    width: 75,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Supplied', field: 'supplied',  width: 105},
       {title: 'Finish',   field: 'finish',    width: 95},
