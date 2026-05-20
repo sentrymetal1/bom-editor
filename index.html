@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v1.6.1</span> — Hotfix: failed saves no longer recurse / hammer the API. Form/MatType/Spec/Material cascade dropdowns.
+  <span id="build-tag-display">v1.7</span> — Cascade lookups now fetched via getBomEditorLookups Deluge function (bypasses portal report-perm wall). Form/MatType/Spec/Material cascade dropdowns.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -333,7 +333,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v1.6.1 (2026-05-20)";
+const BUILD_TAG = "v1.7 (2026-05-20)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "material-compass";
@@ -810,14 +810,78 @@ async function loadMaterialCatalog() {
   console.log('[BOM Editor]', LOOKUP_MATERIAL, '→', cache.records.length, 'material rows');
 }
 
+async function loadBomEditorLookupsViaCustomApi() {
+  const resp = await ZOHO.CREATOR.API.invokeCustomApi({
+    appName:        APP_NAME,
+    customApiName:  'getBomEditorLookups',
+    payload:        {}
+  });
+
+  // The Deluge function returns its map either as `resp.response` or directly as `resp`.
+  // Accept either shape.
+  const data = resp?.response ?? resp?.data ?? resp ?? {};
+  console.log('[BOM Editor] getBomEditorLookups raw response keys:', Object.keys(data || {}));
+
+  // Form Types
+  const ftCache = lookupCache[LOOKUP_FORM_TYPE];
+  ftCache.byId = {};
+  ftCache.optionsList = [];
+  for (const item of (data.formTypes || [])) {
+    const id  = String(item.id);
+    const lbl = String(item.label ?? '');
+    ftCache.byId[id] = lbl;
+    ftCache.optionsList.push({label: lbl, value: id});
+  }
+  ftCache.optionsList.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
+  console.log('[BOM Editor]', LOOKUP_FORM_TYPE, '(via custom API) →', ftCache.optionsList.length, 'active form types');
+
+  // Material Types
+  const mtCache = lookupCache[LOOKUP_MAT_TYPE];
+  mtCache.byId = {};
+  mtCache.optionsList = [];
+  for (const item of (data.matTypes || [])) {
+    const id  = String(item.id);
+    const lbl = String(item.label ?? '');
+    mtCache.byId[id] = lbl;
+    mtCache.optionsList.push({label: lbl, value: id});
+  }
+  mtCache.optionsList.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
+  console.log('[BOM Editor]', LOOKUP_MAT_TYPE, '(via custom API) →', mtCache.optionsList.length, 'material types');
+
+  // Spec combos
+  const mfdCache = lookupCache[LOOKUP_MFD];
+  mfdCache.byId    = {};
+  mfdCache.records = [];
+  for (const item of (data.specs || [])) {
+    const id         = String(item.id);
+    const formTypeId = String(item.formTypeId ?? '');
+    const matTypeId  = String(item.matTypeId ?? '');
+    const typeDetail = String(item.typeDetail ?? '');
+    mfdCache.byId[id] = typeDetail;
+    mfdCache.records.push({id, formTypeId, matTypeId, typeDetail});
+  }
+  console.log('[BOM Editor]', LOOKUP_MFD, '(via custom API) →', mfdCache.records.length, 'spec combos');
+
+  // Material catalog
+  const matCache = lookupCache[LOOKUP_MATERIAL];
+  matCache.byId    = {};
+  matCache.records = [];
+  for (const item of (data.materials || [])) {
+    const id          = String(item.id);
+    const formTypeId  = String(item.formTypeId ?? '');
+    const matTypeId   = String(item.matTypeId ?? '');
+    const description = String(item.description ?? '');
+    matCache.byId[id] = description;
+    matCache.records.push({id, formTypeId, matTypeId, description});
+  }
+  console.log('[BOM Editor]', LOOKUP_MATERIAL, '(via custom API) →', matCache.records.length, 'material rows');
+}
+
 async function loadLookups() {
   await Promise.all([
-    loadOneLookup(LOOKUP_INCH).catch(err => console.error('[BOM Editor]', LOOKUP_INCH, 'fetch failed:', err)),
-    loadOneLookup(LOOKUP_PLATE_FT_W).catch(err => console.error('[BOM Editor]', LOOKUP_PLATE_FT_W, 'fetch failed:', err)),
-    loadFormTypes().catch(err            => console.error('[BOM Editor]', LOOKUP_FORM_TYPE, 'fetch failed:', err)),
-    loadMaterialTypes().catch(err        => console.error('[BOM Editor]', LOOKUP_MAT_TYPE, 'fetch failed:', err)),
-    loadMaterialFormDetail().catch(err   => console.error('[BOM Editor]', LOOKUP_MFD, 'fetch failed:', err)),
-    loadMaterialCatalog().catch(err      => console.error('[BOM Editor]', LOOKUP_MATERIAL, 'fetch failed:', err)),
+    loadOneLookup(LOOKUP_INCH).catch(err          => console.error('[BOM Editor]', LOOKUP_INCH, 'fetch failed:', err)),
+    loadOneLookup(LOOKUP_PLATE_FT_W).catch(err    => console.error('[BOM Editor]', LOOKUP_PLATE_FT_W, 'fetch failed:', err)),
+    loadBomEditorLookupsViaCustomApi().catch(err  => console.error('[BOM Editor] getBomEditorLookups fetch failed:', err)),
   ]);
 }
 
