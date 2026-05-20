@@ -157,6 +157,31 @@
   }
   .tabulator-cell.editable-cell:hover { background: #fff1a8; }
 
+  .tabulator-row.row-edited { box-shadow: inset 3px 0 0 0 #5F94CE; }
+  .tabulator-row.row-deleted .tabulator-cell {
+    color: #888 !important;
+    text-decoration: line-through;
+  }
+  .tabulator-row.row-deleted { background: #fafafa !important; opacity: 0.7; }
+  .tabulator-row.row-deleted:hover { opacity: 0.85; }
+
+  .row-action-btn {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 2px 8px;
+    font: 500 11px inherit;
+    font-family: 'DM Sans', sans-serif;
+    cursor: pointer;
+    text-decoration: none !important;
+  }
+  .row-action-btn.delete  { color: #bc0f0f; }
+  .row-action-btn.restore { color: #2f7d3b; }
+  .row-action-btn:hover { background: rgba(0,0,0,0.06); border-color: rgba(0,0,0,0.12); }
+  .row-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .btn-ghost.active { background: #e8e8e8; border-color: #b0b0b0; }
+
   @keyframes flashGreen {
     0%   { background-color: #cdeccd; }
     100% { background-color: transparent; }
@@ -248,6 +273,7 @@
     <button id="view-flat" class="active">Flat</button>
     <button id="view-grouped">Grouped</button>
   </div>
+  <button class="btn btn-ghost" id="toggle-hide-deleted" title="Hide rows marked for deletion">Hide deleted</button>
   <input type="text" class="filter-input" id="filter-input" placeholder="Filter rows...">
 </div>
 
@@ -256,7 +282,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  v1.2 — Editable cells (yellow): Tag, QTY, FT (L), SA, Galv. Stats refresh after each save. Lookups & dimensions next.
+  v1.3 — Soft delete (reversible). Editable cells in yellow. Rows edited this session show a blue left edge. Deletes stay reversible until parent save runs the recalc chain (next slice).
 </div>
 
 <div id="toast" class="toast"></div>
@@ -271,6 +297,8 @@ let manufactureId  = null;
 let bomData        = [];
 let table          = null;
 let currentView    = 'flat';
+let hideDeleted    = false;
+const recentlyEdited = new Set();
 
 function lookupDisplay(v) {
   if (v === null || v === undefined) return '';
@@ -313,6 +341,7 @@ function mapRecord(r, idx) {
     finish:       lookupDisplay(r.Finish),
     allocatedAmt: Number(r.Total_Allotted_Line_Amount) || 0,
     assemblyGroup: getTagPrefix(r.BOM_Item),
+    deleted:      r.DELETE_field === true || r.DELETE_field === 'true',
   };
 }
 
@@ -356,6 +385,43 @@ async function refetchAndUpdateRow(row, recordId) {
   updateStats();
 }
 
+async function toggleDelete(row, makeDeleted) {
+  const data    = row.getData();
+  const apiVal  = String(makeDeleted);
+  const verb    = makeDeleted ? 'Marked for delete' : 'Restored';
+
+  try {
+    const resp = await ZOHO.CREATOR.API.updateRecord({
+      appName:    APP_NAME,
+      reportName: REPORT_NAME,
+      id:         data.id,
+      data:       { data: { DELETE_field: apiVal } }
+    });
+    if (!resp || (resp.code !== 3000 && !resp.result)) {
+      throw new Error('Bad response: ' + JSON.stringify(resp));
+    }
+
+    try {
+      await refetchAndUpdateRow(row, data.id);
+    } catch (refetchErr) {
+      console.warn('[BOM Editor] Save OK but refetch failed:', refetchErr);
+      const item = bomData.find(r => r.id === data.id);
+      if (item) item.deleted = makeDeleted;
+      row.update({deleted: makeDeleted});
+    }
+
+    recentlyEdited.add(data.id);
+    row.reformat();
+    flashRow(row, 'success');
+    showToast(`${verb} row ${data.lineItem}.`, 'success');
+  } catch (err) {
+    flashRow(row, 'error');
+    const detail = err?.responseText || err?.message || JSON.stringify(err);
+    showToast('Action failed: ' + detail, 'error');
+    console.error('[BOM Editor] toggleDelete failed', err);
+  }
+}
+
 function makeEditHandler(fieldLinkName, dataKey, opts) {
   opts = opts || {};
   return async function(cell) {
@@ -394,6 +460,8 @@ function makeEditHandler(fieldLinkName, dataKey, opts) {
         updateStats();
       }
 
+      recentlyEdited.add(data.id);
+      row.reformat();
       flashRow(row, 'success');
       showToast(`Saved ${opts.label || fieldLinkName} on row ${data.lineItem}.`, 'success');
     } catch (err) {
@@ -493,7 +561,27 @@ function renderGrid() {
       {title: 'Supplied', field: 'supplied',  width: 105},
       {title: 'Finish',   field: 'finish',    width: 95},
       {title: 'Allocated',field: 'allocatedAmt', width: 105, hozAlign: 'right', formatter: (c) => `$${(c.getValue()||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`},
+      {title: '', field: 'deleted', width: 85, hozAlign: 'center', headerSort: false, frozen: true, frozenPosition: 'right',
+        formatter: (cell) => {
+          const d = cell.getData();
+          return d.deleted
+            ? '<button class="row-action-btn restore" data-action="restore">Restore</button>'
+            : '<button class="row-action-btn delete"  data-action="delete">Delete</button>';
+        },
+        cellClick: (e, cell) => {
+          const btn = e.target.closest('button[data-action]');
+          if (!btn) return;
+          e.stopPropagation();
+          const makeDeleted = btn.dataset.action === 'delete';
+          toggleDelete(cell.getRow(), makeDeleted);
+        }},
     ],
+    rowFormatter: function(row) {
+      const data = row.getData();
+      const el   = row.getElement();
+      el.classList.toggle('row-deleted', data.deleted === true);
+      el.classList.toggle('row-edited',  recentlyEdited.has(data.id));
+    },
   });
 }
 
@@ -516,20 +604,25 @@ function applyView(view) {
 document.getElementById('view-flat').addEventListener('click',    () => applyView('flat'));
 document.getElementById('view-grouped').addEventListener('click', () => applyView('grouped'));
 
-document.getElementById('filter-input').addEventListener('input', (e) => {
+function applyAllFilters() {
   if (!table) return;
-  const v = e.target.value.toLowerCase();
-  if (!v) {
-    table.clearFilter();
-  } else {
-    table.setFilter([[
-      {field: 'tag',           type: 'like', value: v},
-      {field: 'component',     type: 'like', value: v},
-      {field: 'material',      type: 'like', value: v},
-      {field: 'materialDesc',  type: 'like', value: v},
-      {field: 'assemblyGroup', type: 'like', value: v},
-    ]]);
-  }
+  const text = (document.getElementById('filter-input').value || '').toLowerCase().trim();
+  table.setFilter((data) => {
+    if (hideDeleted && data.deleted) return false;
+    if (!text) return true;
+    const hay = [data.tag, data.component, data.material, data.materialDesc, data.assemblyGroup]
+      .filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(text);
+  });
+}
+
+document.getElementById('filter-input').addEventListener('input', applyAllFilters);
+
+document.getElementById('toggle-hide-deleted').addEventListener('click', (e) => {
+  hideDeleted = !hideDeleted;
+  e.currentTarget.textContent = hideDeleted ? 'Show deleted' : 'Hide deleted';
+  e.currentTarget.classList.toggle('active', hideDeleted);
+  applyAllFilters();
 });
 
 document.getElementById('back').addEventListener('click', () => {
