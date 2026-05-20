@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v1.4-d3</span> — Click "Save to Project" to commit pending changes and recalculate project totals. Orphan rows marked for delete are hard-deleted at that point; rows with allocated material stay (clear allocations first).
+  <span id="build-tag-display">v1.4</span> — Click "Save to Project" to commit pending changes and recalculate project totals. Orphan rows marked for delete are hard-deleted at that point; rows with allocated material stay (clear allocations first).
 </div>
 
 <div id="toast" class="toast"></div>
@@ -333,7 +333,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v1.4-d3 (2026-05-20)";
+const BUILD_TAG = "v1.4 (2026-05-20)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "material-compass";
@@ -453,15 +453,12 @@ async function commitChanges() {
   // so we can detect ones that survived (allocations block hard-delete)
   const beforeMarked = new Set(bomData.filter(r => r.deleted).map(r => r.id));
 
-  const triggerValue = Math.floor(Date.now() / 1000) % 10000;
-  console.log('[BOM Editor] commit — sending BOM_Recalc_Trigger =', triggerValue, '(digits:', String(triggerValue).length, ')');
-
   try {
     const resp = await ZOHO.CREATOR.API.updateRecord({
       appName:    APP_NAME,
       reportName: PROJECT_REPORT_NAME,
       id:         projectId,
-      data:       { data: { BOM_Recalc_Trigger: triggerValue } }
+      data:       { data: { BOM_Recalc_Trigger: Math.floor(Date.now() / 1000) % 10000 } }
     });
     if (!resp || (resp.code !== 3000 && !resp.result)) {
       throw new Error('Bad response: ' + JSON.stringify(resp));
@@ -673,7 +670,7 @@ function renderGrid() {
       {title: 'Supplied', field: 'supplied',  width: 105},
       {title: 'Finish',   field: 'finish',    width: 95},
       {title: 'Allocated',field: 'allocatedAmt', width: 105, hozAlign: 'right', formatter: (c) => `$${(c.getValue()||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`},
-      {title: '', field: 'deleted', width: 85, hozAlign: 'center', headerSort: false, frozen: true, frozenPosition: 'right',
+      {title: '', field: 'deleted', width: 85, hozAlign: 'center', headerSort: false, frozen: true,
         formatter: (cell) => {
           const d = cell.getData();
           return d.deleted
