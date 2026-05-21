@@ -319,10 +319,13 @@
 
 <div id="loading" class="state-msg"><span class="spinner"></span>Loading BOM rows...</div>
 <div id="error" class="state-msg error" style="display:none;"></div>
+<div id="quota-banner" style="display:none; background:#fdecea; border-top:1px solid #f5c2c0; border-bottom:1px solid #f5c2c0; color:#7a1f1a; padding:8px 16px; font-size:13px;">
+  <strong>Zoho API daily quota reached.</strong> Lookup dropdowns (Form / Mat Type / Spec / Material) cannot fetch new options until the limit resets at midnight UTC. Existing cell values display normally. Upgrade Zoho plan for higher limits.
+</div>
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.3</span> — Spec + Material fetched per Form+MatType combo (filtered server-side, ~20-200 rows each). Replaces v2.2's 10k preload that hit cap.
+  <span id="build-tag-display">v2.4</span> — Surfaces Zoho code 4000 (daily API quota) explicitly in toast + banner instead of silent empty dropdowns.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -333,7 +336,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.3 (2026-05-21)";
+const BUILD_TAG = "v2.4 (2026-05-21)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -796,8 +799,23 @@ async function fetchAllPages(reportName, criteria) {
 
 const RAILWAY_BASE = 'https://material-compass-nesting-app-production.up.railway.app';
 
+// Tracks whether the Zoho daily API quota has been hit — surfaced once via toast + banner,
+// then re-suppressed for further failing calls in the same session to avoid spam.
+let zohoQuotaExhausted = false;
+
 async function fetchRailwayLookup(path) {
   const resp = await fetch(RAILWAY_BASE + path);
+  if (resp.status === 503) {
+    let body = null;
+    try { body = await resp.json(); } catch (_) {}
+    if (body?.zoho_code === 4000 && !zohoQuotaExhausted) {
+      zohoQuotaExhausted = true;
+      showToast('Zoho daily API quota reached. Dropdowns will repopulate after midnight UTC.', 'error');
+      const banner = document.getElementById('quota-banner');
+      if (banner) banner.style.display = 'block';
+    }
+    throw new Error('Zoho quota exhausted on ' + path);
+  }
   if (!resp.ok) throw new Error('HTTP ' + resp.status + ' on ' + path);
   return await resp.json();
 }
