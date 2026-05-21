@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v1.9</span> — APP_NAME fixed to type-formsheet-2-18-21 (was material-compass). invokeCustomApi needs canonical app link name. Cascade lookups via getBomEditorLookups.
+  <span id="build-tag-display">v2.0</span> — Cells now fall back to inline display_value from getAllRecords when cascade cache is empty. Form/MatType/Spec/Material display works even if Custom API fails.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -408,9 +408,13 @@ function mapRecord(r, idx) {
     component:    lookupDisplay(r.Component),
     drawing:      lookupDisplay(r.Scope_LU),
     formType:     readLookupId(r.Form_Type),
+    formTypeLbl:  lookupDisplay(r.Form_Type),
     matType:      readLookupId(r.Material_Type),
+    matTypeLbl:   lookupDisplay(r.Material_Type),
     spec:         readLookupId(r.Specification),
+    specLbl:      lookupDisplay(r.Specification),
     material:     readLookupId(r.Material),
+    materialLbl:  lookupDisplay(r.Material),
     qty:          Number(r.Quantity) || 0,
     ftL:          Number(r.Length_FT) || 0,
     inchL:        readLookupId(r.Length_INCH),
@@ -938,7 +942,7 @@ function renderGrid() {
       {title: 'Drawing',  field: 'drawing',   width: 130, formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
       {title: 'Form',     field: 'formType',  width: 110,
         formatter: (c) => {
-          const lbl = lookupCache[LOOKUP_FORM_TYPE].byId[c.getValue()] || '';
+          const lbl = lookupCache[LOOKUP_FORM_TYPE].byId[c.getValue()] || c.getRow().getData().formTypeLbl || '';
           return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
         },
         editor: 'list',
@@ -951,7 +955,7 @@ function renderGrid() {
         cssClass: 'editable-cell'},
       {title: 'Mat Type', field: 'matType',   width: 140,
         formatter: (c) => {
-          const lbl = lookupCache[LOOKUP_MAT_TYPE].byId[c.getValue()] || '';
+          const lbl = lookupCache[LOOKUP_MAT_TYPE].byId[c.getValue()] || c.getRow().getData().matTypeLbl || '';
           return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
         },
         editor: 'list',
@@ -963,7 +967,7 @@ function renderGrid() {
         cssClass: 'editable-cell'},
       {title: 'Spec',     field: 'spec',      width: 115,
         formatter: (c) => {
-          const lbl = lookupCache[LOOKUP_MFD].byId[c.getValue()] || '';
+          const lbl = lookupCache[LOOKUP_MFD].byId[c.getValue()] || c.getRow().getData().specLbl || '';
           return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
         },
         editor: 'list',
@@ -984,7 +988,7 @@ function renderGrid() {
         cssClass: 'editable-cell'},
       {title: 'Material', field: 'material',  width: 210,
         formatter: (c) => {
-          const lbl = lookupCache[LOOKUP_MATERIAL].byId[c.getValue()] || '';
+          const lbl = lookupCache[LOOKUP_MATERIAL].byId[c.getValue()] || c.getRow().getData().materialLbl || '';
           return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
         },
         editor: 'list',
