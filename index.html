@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.2</span> — Cascade lookups via Railway proxy (/api/bom-lookups/*). Bypasses widget perm wall — server-side OAuth as account owner.
+  <span id="build-tag-display">v2.3</span> — Spec + Material fetched per Form+MatType combo (filtered server-side, ~20-200 rows each). Replaces v2.2's 10k preload that hit cap.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -333,7 +333,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.2 (2026-05-21)";
+const BUILD_TAG = "v2.3 (2026-05-21)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -368,6 +368,41 @@ const lookupCache = {
   [LOOKUP_MFD]:        { byId: {}, records: [] },
   [LOOKUP_MATERIAL]:   { byId: {}, records: [] },
 };
+
+// Per-combo cache for spec + material dropdowns. Keyed by "formTypeId|matTypeId".
+// Populated on demand via /api/bom-lookups/material-form-detail and /api/bom-lookups/materials
+// with form_type_id + material_type_id query params. Avoids preloading 100k+ rows.
+const comboCache = {};
+function comboKey(formTypeId, matTypeId) {
+  return (formTypeId || '') + '|' + (matTypeId || '');
+}
+async function ensureComboLoaded(formTypeId, matTypeId) {
+  if (!formTypeId || !matTypeId) return null;
+  const key = comboKey(formTypeId, matTypeId);
+  if (comboCache[key]) return comboCache[key];
+  comboCache[key] = { specs: [], materials: [], loading: true };
+  try {
+    const qs = '?form_type_id=' + encodeURIComponent(formTypeId) + '&material_type_id=' + encodeURIComponent(matTypeId);
+    const [specRows, matRows] = await Promise.all([
+      fetchRailwayLookup('/api/bom-lookups/material-form-detail' + qs),
+      fetchRailwayLookup('/api/bom-lookups/materials' + qs),
+    ]);
+    const specs = specRows.map(r => ({label: String(r.typeDetail ?? ''), value: String(r.id)}))
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
+    const materials = matRows.map(r => ({label: String(r.description ?? ''), value: String(r.id)}))
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
+    comboCache[key] = { specs, materials, loading: false };
+    // Mirror into lookupCache byId so existing formatters keep working
+    for (const r of specRows) lookupCache[LOOKUP_MFD].byId[String(r.id)] = String(r.typeDetail ?? '');
+    for (const r of matRows)  lookupCache[LOOKUP_MATERIAL].byId[String(r.id)] = String(r.description ?? '');
+    console.log('[BOM Editor] combo', key, '→', specs.length, 'specs,', materials.length, 'materials');
+    return comboCache[key];
+  } catch (err) {
+    console.error('[BOM Editor] combo load failed', key, err);
+    delete comboCache[key];
+    return null;
+  }
+}
 
 const SYSTEM_FIELD_PREFIXES = ['ID', 'Added_Time', 'Added_User', 'Modified_Time', 'Modified_User', 'zc_'];
 function pickDisplayField(record) {
@@ -680,6 +715,13 @@ function makeCascadeEditHandler(fieldLinkName, dataKey, downstream, opts) {
       flashRow(row, 'success');
       const tail = clearedDataKeys.length ? ` (cleared ${clearedDataKeys.length} downstream field${clearedDataKeys.length>1?'s':''})` : '';
       showToast(`Saved ${opts.label || fieldLinkName} on row ${data.lineItem}${tail}.`, 'success');
+      // Pre-fetch the new Form+MatType combo's specs+materials so the next dropdown is ready.
+      if (dataKey === 'formType' || dataKey === 'matType') {
+        const fresh = row.getData();
+        if (fresh.formType && fresh.matType) {
+          ensureComboLoaded(fresh.formType, fresh.matType).then(() => row.reformat());
+        }
+      }
     } catch (err) {
       flashRow(row, 'error');
       const detail = err?.responseText || err?.message || JSON.stringify(err);
@@ -895,9 +937,27 @@ async function loadLookups() {
     loadOneLookup(LOOKUP_PLATE_FT_W).catch(err    => console.error('[BOM Editor]', LOOKUP_PLATE_FT_W, 'fetch failed:', err)),
     loadFormTypes().catch(err                     => console.error('[BOM Editor]', LOOKUP_FORM_TYPE, 'fetch failed:', err)),
     loadMaterialTypes().catch(err                 => console.error('[BOM Editor]', LOOKUP_MAT_TYPE, 'fetch failed:', err)),
-    loadMaterialFormDetail().catch(err            => console.error('[BOM Editor]', LOOKUP_MFD, 'fetch failed:', err)),
-    loadMaterialCatalog().catch(err               => console.error('[BOM Editor]', LOOKUP_MATERIAL, 'fetch failed:', err)),
   ]);
+  // material-form-detail + materials are NOT preloaded — they're huge (>10k rows total
+  // across all form types). Instead they're fetched on demand per Form+MatType combo via
+  // ensureComboLoaded — see preloadCombosFromBOM() called after BOM rows render.
+}
+
+async function preloadCombosFromBOM() {
+  if (!Array.isArray(bomData)) return;
+  const seen = new Set();
+  const combos = [];
+  for (const row of bomData) {
+    if (row.formType && row.matType) {
+      const k = comboKey(row.formType, row.matType);
+      if (!seen.has(k)) { seen.add(k); combos.push([row.formType, row.matType]); }
+    }
+  }
+  if (!combos.length) return;
+  console.log('[BOM Editor] preloading', combos.length, 'Form+MatType combo(s) for current BOM');
+  await Promise.all(combos.map(([f, m]) => ensureComboLoaded(f, m)));
+  // Refresh cells so existing Spec/Material labels resolve from newly populated byId cache
+  if (table) table.redraw(true);
 }
 
 async function loadBOM() {
@@ -921,6 +981,7 @@ async function loadBOM() {
     document.getElementById('loading').style.display = 'none';
     document.getElementById('bom-table').style.display = 'block';
     renderGrid();
+    preloadCombosFromBOM().catch(err => console.error('[BOM Editor] preloadCombosFromBOM failed:', err));
   } catch (err) {
     showError('Failed to load BOM rows.', err);
   }
@@ -988,11 +1049,12 @@ function renderGrid() {
           values: function(cell) {
             const d = cell.getRow().getData();
             if (!d.formType || !d.matType) return [];
-            const opts = lookupCache[LOOKUP_MFD].records
-              .filter(r => r.formTypeId === d.formType && r.matTypeId === d.matType)
-              .map(r => ({label: r.typeDetail, value: r.id}));
-            opts.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
-            return opts;
+            const combo = comboCache[comboKey(d.formType, d.matType)];
+            if (!combo) {
+              ensureComboLoaded(d.formType, d.matType).then(() => cell.getRow().reformat());
+              return [];
+            }
+            return combo.specs || [];
           }
         },
         cellEdited: makeCascadeEditHandler('Specification', 'spec', [], {label: 'Spec'}),
@@ -1009,11 +1071,12 @@ function renderGrid() {
           values: function(cell) {
             const d = cell.getRow().getData();
             if (!d.formType || !d.matType) return [];
-            const opts = lookupCache[LOOKUP_MATERIAL].records
-              .filter(r => r.formTypeId === d.formType && r.matTypeId === d.matType)
-              .map(r => ({label: r.description, value: r.id}));
-            opts.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
-            return opts;
+            const combo = comboCache[comboKey(d.formType, d.matType)];
+            if (!combo) {
+              ensureComboLoaded(d.formType, d.matType).then(() => cell.getRow().reformat());
+              return [];
+            }
+            return combo.materials || [];
           }
         },
         cellEdited: makeCascadeEditHandler('Material', 'material', [], {label: 'Material'}),
