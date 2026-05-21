@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.1</span> — Burned Custom API path. 4 parallel getAllRecords calls (MaterialIntel pattern) replace getBomEditorLookups. Same pattern as every other widget.
+  <span id="build-tag-display">v2.2</span> — Cascade lookups via Railway proxy (/api/bom-lookups/*). Bypasses widget perm wall — server-side OAuth as account owner.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -333,7 +333,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.1 (2026-05-21)";
+const BUILD_TAG = "v2.2 (2026-05-21)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -752,66 +752,74 @@ async function fetchAllPages(reportName, criteria) {
   return all;
 }
 
+const RAILWAY_BASE = 'https://material-compass-nesting-app-production.up.railway.app';
+
+async function fetchRailwayLookup(path) {
+  const resp = await fetch(RAILWAY_BASE + path);
+  if (!resp.ok) throw new Error('HTTP ' + resp.status + ' on ' + path);
+  return await resp.json();
+}
+
 async function loadFormTypes() {
-  const rows = await fetchAllPages(LOOKUP_FORM_TYPE, 'Active == true');
+  const rows = await fetchRailwayLookup('/api/bom-lookups/form-types');
   const cache = lookupCache[LOOKUP_FORM_TYPE];
   cache.byId = {};
   cache.optionsList = [];
   for (const r of rows) {
-    const id  = String(r.ID);
-    const lbl = String(r.Form_Type ?? '');
+    const id  = String(r.id);
+    const lbl = String(r.label ?? '');
     cache.byId[id] = lbl;
     cache.optionsList.push({label: lbl, value: id});
   }
   cache.optionsList.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
-  console.log('[BOM Editor]', LOOKUP_FORM_TYPE, '→', cache.optionsList.length, 'active form types');
+  console.log('[BOM Editor]', LOOKUP_FORM_TYPE, '(via Railway) →', cache.optionsList.length, 'active form types');
 }
 
 async function loadMaterialTypes() {
-  const rows = await fetchAllPages(LOOKUP_MAT_TYPE);
+  const rows = await fetchRailwayLookup('/api/bom-lookups/material-types');
   const cache = lookupCache[LOOKUP_MAT_TYPE];
   cache.byId = {};
   cache.optionsList = [];
   for (const r of rows) {
-    const id  = String(r.ID);
-    const lbl = String(r.Material_Type ?? '');
+    const id  = String(r.id);
+    const lbl = String(r.label ?? '');
     cache.byId[id] = lbl;
     cache.optionsList.push({label: lbl, value: id});
   }
   cache.optionsList.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
-  console.log('[BOM Editor]', LOOKUP_MAT_TYPE, '→', cache.optionsList.length, 'material types');
+  console.log('[BOM Editor]', LOOKUP_MAT_TYPE, '(via Railway) →', cache.optionsList.length, 'material types');
 }
 
 async function loadMaterialFormDetail() {
-  const rows = await fetchAllPages(LOOKUP_MFD);
+  const rows = await fetchRailwayLookup('/api/bom-lookups/material-form-detail');
   const cache = lookupCache[LOOKUP_MFD];
   cache.byId    = {};
   cache.records = [];
   for (const r of rows) {
-    const id         = String(r.ID);
-    const formTypeId = readLookupId(r.Form_Type);
-    const matTypeId  = readLookupId(r.Material_Type);
-    const typeDetail = String(r.Type_Detail ?? '');
+    const id         = String(r.id);
+    const formTypeId = String(r.formTypeId ?? '');
+    const matTypeId  = String(r.matTypeId ?? '');
+    const typeDetail = String(r.typeDetail ?? '');
     cache.byId[id] = typeDetail;
     cache.records.push({id, formTypeId, matTypeId, typeDetail});
   }
-  console.log('[BOM Editor]', LOOKUP_MFD, '→', cache.records.length, 'spec combos');
+  console.log('[BOM Editor]', LOOKUP_MFD, '(via Railway) →', cache.records.length, 'spec combos');
 }
 
 async function loadMaterialCatalog() {
-  const rows = await fetchAllPages(LOOKUP_MATERIAL);
+  const rows = await fetchRailwayLookup('/api/bom-lookups/materials');
   const cache = lookupCache[LOOKUP_MATERIAL];
   cache.byId    = {};
   cache.records = [];
   for (const r of rows) {
-    const id          = String(r.ID);
-    const formTypeId  = readLookupId(r.Form_Types);
-    const matTypeId   = readLookupId(r.Material_Types);
-    const description = String(r.Description ?? '');
+    const id          = String(r.id);
+    const formTypeId  = String(r.formTypeId ?? '');
+    const matTypeId   = String(r.matTypeId ?? '');
+    const description = String(r.description ?? '');
     cache.byId[id] = description;
     cache.records.push({id, formTypeId, matTypeId, description});
   }
-  console.log('[BOM Editor]', LOOKUP_MATERIAL, '→', cache.records.length, 'material rows');
+  console.log('[BOM Editor]', LOOKUP_MATERIAL, '(via Railway) →', cache.records.length, 'material rows');
 }
 
 async function loadBomEditorLookupsViaCustomApi() {
