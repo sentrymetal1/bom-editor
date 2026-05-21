@@ -322,7 +322,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.0</span> — Cells now fall back to inline display_value from getAllRecords when cascade cache is empty. Form/MatType/Spec/Material display works even if Custom API fails.
+  <span id="build-tag-display">v2.1</span> — Burned Custom API path. 4 parallel getAllRecords calls (MaterialIntel pattern) replace getBomEditorLookups. Same pattern as every other widget.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -333,7 +333,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v1.7 (2026-05-20)";
+const BUILD_TAG = "v2.1 (2026-05-21)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -885,7 +885,10 @@ async function loadLookups() {
   await Promise.all([
     loadOneLookup(LOOKUP_INCH).catch(err          => console.error('[BOM Editor]', LOOKUP_INCH, 'fetch failed:', err)),
     loadOneLookup(LOOKUP_PLATE_FT_W).catch(err    => console.error('[BOM Editor]', LOOKUP_PLATE_FT_W, 'fetch failed:', err)),
-    loadBomEditorLookupsViaCustomApi().catch(err  => console.error('[BOM Editor] getBomEditorLookups fetch failed:', err)),
+    loadFormTypes().catch(err                     => console.error('[BOM Editor]', LOOKUP_FORM_TYPE, 'fetch failed:', err)),
+    loadMaterialTypes().catch(err                 => console.error('[BOM Editor]', LOOKUP_MAT_TYPE, 'fetch failed:', err)),
+    loadMaterialFormDetail().catch(err            => console.error('[BOM Editor]', LOOKUP_MFD, 'fetch failed:', err)),
+    loadMaterialCatalog().catch(err               => console.error('[BOM Editor]', LOOKUP_MATERIAL, 'fetch failed:', err)),
   ]);
 }
 
