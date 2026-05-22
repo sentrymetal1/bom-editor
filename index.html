@@ -325,7 +325,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.6</span> — 3-level cascade: Material now filters by Form+MatType+Spec. Dedupes duplicate descriptions (catalog has multiple records per size×spec). Changing Spec clears Material.
+  <span id="build-tag-display">v2.7</span> — Dropped spec filter (catalog's Spec field is inconsistently populated). Material shows all unique sizes for Form+MatType, deduped by description. Preload throttled to 3 concurrent combos.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -336,7 +336,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.6 (2026-05-22)";
+const BUILD_TAG = "v2.7 (2026-05-22)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -976,7 +976,19 @@ async function preloadCombosFromBOM() {
   }
   if (!combos.length) return;
   console.log('[BOM Editor] preloading', combos.length, 'Form+MatType combo(s) for current BOM');
-  await Promise.all(combos.map(([f, m]) => ensureComboLoaded(f, m)));
+  // Concurrency limit: each combo fires 2 fetches (specs + materials). At 12 combos
+  // unlimited, that's 24 simultaneous Zoho calls which trips Zoho's per-minute throttle
+  // (returns 400 "too many requests continuously"). Cap at 3 in-flight combos.
+  const CONCURRENCY = 3;
+  let idx = 0;
+  async function worker() {
+    while (idx < combos.length) {
+      const myIdx = idx++;
+      const [f, m] = combos[myIdx];
+      try { await ensureComboLoaded(f, m); } catch (e) { /* ensureComboLoaded already logs */ }
+    }
+  }
+  await Promise.all(Array.from({length: CONCURRENCY}, () => worker()));
   // Refresh cells so existing Spec/Material labels resolve from newly populated byId cache
   if (table) table.redraw(true);
 }
@@ -1092,18 +1104,14 @@ function renderGrid() {
             ensureComboLoaded(d.formType, d.matType).then(() => cell.getRow().reformat());
             return {values: []};
           }
-          let mats = combo.materials || [];
-          // If Spec is set AND any material records have a specId, filter by it.
-          // (Beam_Channel_Tee_Lookup's Specification field is often unpopulated, so we
-          // gate this behind a check to avoid empty dropdowns.)
-          if (d.spec && mats.some(m => m.specId)) {
-            mats = mats.filter(m => m.specId === d.spec);
-          }
           // Dedupe by description: catalog has many records per visible size (one per
-          // dim variant / weight / finish). User only needs to see each size once.
+          // dim variant / weight / finish / spec). User only needs to see each size once.
+          // No spec filter — Beam_Channel_Tee_Lookup's Specification field is
+          // inconsistently populated (most records have it empty, a few have it set),
+          // so filtering by it yields misleading results.
           const seen = new Set();
           const deduped = [];
-          for (const m of mats) {
+          for (const m of (combo.materials || [])) {
             if (!seen.has(m.label)) {
               seen.add(m.label);
               deduped.push({label: m.label, value: m.value});
