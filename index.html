@@ -308,6 +308,7 @@
 
 <div class="toolbar">
   <button class="btn btn-ghost" id="back">← Back to Project</button>
+  <button class="btn btn-ghost" id="add-row" title="Add a new BOM row to this project">+ Add Row</button>
   <div class="view-toggle">
     <button id="view-flat" class="active">Flat</button>
     <button id="view-grouped">Grouped</button>
@@ -325,7 +326,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.7</span> — Dropped spec filter (catalog's Spec field is inconsistently populated). Material shows all unique sizes for Form+MatType, deduped by description. Preload throttled to 3 concurrent combos.
+  <span id="build-tag-display">v2.8</span> — Column widths tweaked + Delete column narrowed + Add Row button (top of toolbar). Defaults: next line number + linked to current project.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -336,7 +337,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.7 (2026-05-22)";
+const BUILD_TAG = "v2.8 (2026-05-22)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1121,48 +1122,48 @@ function renderGrid() {
         },
         cellEdited: makeCascadeEditHandler('Material', 'material', [], {label: 'Material'}),
         cssClass: 'editable-cell'},
-      {title: 'QTY',      field: 'qty',       width: 65,  hozAlign: 'right',
+      {title: 'QTY',      field: 'qty',       width: 75,  hozAlign: 'right',
         editor: 'number', editorParams: {min: 0, step: 1},
         cellEdited: makeEditHandler('Quantity', 'qty', {label: 'QTY', validate: nonNegNumber}),
         cssClass: 'editable-cell'},
-      {title: 'FT (L)',   field: 'ftL',       width: 65,  hozAlign: 'right',
+      {title: 'FT (L)',   field: 'ftL',       width: 80,  hozAlign: 'right',
         editor: 'number', editorParams: {min: 0, step: 1},
         cellEdited: makeEditHandler('Length_FT', 'ftL', {label: 'FT (L)', validate: nonNegNumber}),
         cssClass: 'editable-cell'},
-      {title: 'INCH (L)', field: 'inchL',     width: 85,
+      {title: 'INCH (L)', field: 'inchL',     width: 100,
         formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_INCH].optionsList},
         cellEdited: makeEditHandler('Length_INCH', 'inchL', {label: 'INCH (L)'}),
         cssClass: 'editable-cell'},
-      {title: 'FT (W)',   field: 'ftW',       width: 65,
+      {title: 'FT (W)',   field: 'ftW',       width: 80,
         formatter: (cell) => lookupCache[LOOKUP_PLATE_FT_W].byId[cell.getValue()] || '',
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_PLATE_FT_W].optionsList},
         cellEdited: makeEditHandler('Width_FT', 'ftW', {label: 'FT (W)'}),
         cssClass: 'editable-cell'},
-      {title: 'INCH (W)', field: 'inchW',     width: 85,
+      {title: 'INCH (W)', field: 'inchW',     width: 100,
         formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_INCH].optionsList},
         cellEdited: makeEditHandler('Width_INCH', 'inchW', {label: 'INCH (W)'}),
         cssClass: 'editable-cell'},
-      {title: 'Unit WT',  field: 'unitWt',    width: 85,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
-      {title: 'Tot WT',   field: 'totWt',     width: 95,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
-      {title: 'Area',     field: 'area',      width: 75,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
+      {title: 'Unit WT',  field: 'unitWt',    width: 100, hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
+      {title: 'Tot WT',   field: 'totWt',     width: 110, hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
+      {title: 'Area',     field: 'area',      width: 90,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'SA',       field: 'sa',        width: 45,  hozAlign: 'center', formatter: 'tickCross',
         editor: 'tickCross',
         cellEdited: makeEditHandler('Plate_SA', 'sa', {label: 'SA', toApi: boolToApi}),
         cssClass: 'editable-cell'},
-      {title: 'Galv',     field: 'galv',      width: 50,  hozAlign: 'center', formatter: 'tickCross',
+      {title: 'Galv',     field: 'galv',      width: 65,  hozAlign: 'center', formatter: 'tickCross',
         editor: 'tickCross',
         cellEdited: makeEditHandler('Galv', 'galv', {label: 'Galv', toApi: boolToApi}),
         cssClass: 'editable-cell'},
-      {title: 'Galv LB',  field: 'galvLb',    width: 75,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
-      {title: 'Supplied', field: 'supplied',  width: 105},
-      {title: 'Finish',   field: 'finish',    width: 95},
+      {title: 'Galv LB',  field: 'galvLb',    width: 95,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
+      {title: 'Supplied', field: 'supplied',  width: 130},
+      {title: 'Finish',   field: 'finish',    width: 120},
       {title: 'Allocated',field: 'allocatedAmt', width: 105, hozAlign: 'right', formatter: (c) => `$${(c.getValue()||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`},
-      {title: '', field: 'deleted', width: 85, hozAlign: 'center', headerSort: false, frozen: true,
+      {title: '', field: 'deleted', width: 55, hozAlign: 'center', headerSort: false, frozen: true,
         formatter: (cell) => {
           const d = cell.getData();
           return d.deleted
@@ -1236,6 +1237,50 @@ document.getElementById('back').addEventListener('click', () => {
     window.top.location.href = url;
   }
 });
+
+document.getElementById('add-row').addEventListener('click', addNewBomRow);
+
+async function addNewBomRow() {
+  const btn = document.getElementById('add-row');
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = 'Adding...';
+  try {
+    const nextLineItem = Math.max(0, ...bomData.map(r => Number(r.lineItem) || 0)) + 1;
+    const resp = await ZOHO.CREATOR.API.addRecord({
+      appName:  APP_NAME,
+      formName: 'Project_Bill_Of_Material_Detail_Form',
+      data: { data: {
+        MCP_Customer_Project_Form: projectId,
+        Line_Item: nextLineItem,
+      }}
+    });
+    if (!resp || (resp.code !== 3000 && !resp.data && !resp.result)) {
+      throw new Error('Bad addRecord response: ' + JSON.stringify(resp));
+    }
+    // Zoho returns the new record under resp.data or resp.result.data depending on SDK version
+    const newRecord = resp.data || resp.result?.data || resp.result;
+    if (!newRecord || !newRecord.ID) {
+      throw new Error('addRecord response missing record ID: ' + JSON.stringify(resp));
+    }
+    const newRow = mapRecord(newRecord, nextLineItem - 1);
+    bomData.push(newRow);
+    if (table) {
+      table.addRow(newRow, false); // false = add to bottom
+      table.scrollToRow(newRow.id, 'bottom', false);
+    }
+    recentlyEdited.add(newRow.id);
+    updateStats();
+    updateSaveButtonState();
+    showToast(`Added row ${nextLineItem} — fill in Tag / Form / Mat Type / etc.`, 'success');
+  } catch (err) {
+    showToast('Add row failed: ' + (err.message || JSON.stringify(err)), 'error');
+    console.error('[BOM Editor] addRecord failed', err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
 
 ZOHO.CREATOR.init().then(function() {
   const params = ZOHO.CREATOR.UTIL.getQueryParams();
