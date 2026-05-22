@@ -1093,10 +1093,14 @@ function renderGrid() {
             return {values: []};
           }
           let mats = combo.materials || [];
-          // 3-level cascade: if Spec is set, filter to just that spec's records.
-          if (d.spec) mats = mats.filter(m => m.specId === d.spec);
-          // Dedupe by description: the catalog has multiple records per size×spec,
-          // but a user only needs to see each unique size once.
+          // If Spec is set AND any material records have a specId, filter by it.
+          // (Beam_Channel_Tee_Lookup's Specification field is often unpopulated, so we
+          // gate this behind a check to avoid empty dropdowns.)
+          if (d.spec && mats.some(m => m.specId)) {
+            mats = mats.filter(m => m.specId === d.spec);
+          }
+          // Dedupe by description: catalog has many records per visible size (one per
+          // dim variant / weight / finish). User only needs to see each size once.
           const seen = new Set();
           const deduped = [];
           for (const m of mats) {
