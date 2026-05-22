@@ -325,7 +325,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.4</span> — Surfaces Zoho code 4000 (daily API quota) explicitly in toast + banner instead of silent empty dropdowns.
+  <span id="build-tag-display">v2.5</span> — Spec/Material editorParams as outer function (was inner values function). Tabulator 5.5.2 needs full editorParams to be the function to re-evaluate per cell-open.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -336,7 +336,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.4 (2026-05-21)";
+const BUILD_TAG = "v2.5 (2026-05-22)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1061,19 +1061,15 @@ function renderGrid() {
           return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
         },
         editor: 'list',
-        editorParams: {
-          autocomplete: true,
-          listOnEmpty: true,
-          values: function(cell) {
-            const d = cell.getRow().getData();
-            if (!d.formType || !d.matType) return [];
-            const combo = comboCache[comboKey(d.formType, d.matType)];
-            if (!combo) {
-              ensureComboLoaded(d.formType, d.matType).then(() => cell.getRow().reformat());
-              return [];
-            }
-            return combo.specs || [];
+        editorParams: function(cell) {
+          const d = cell.getRow().getData();
+          if (!d.formType || !d.matType) return {values: []};
+          const combo = comboCache[comboKey(d.formType, d.matType)];
+          if (!combo) {
+            ensureComboLoaded(d.formType, d.matType).then(() => cell.getRow().reformat());
+            return {values: []};
           }
+          return {values: combo.specs || [], autocomplete: true, listOnEmpty: true};
         },
         cellEdited: makeCascadeEditHandler('Specification', 'spec', [], {label: 'Spec'}),
         cssClass: 'editable-cell'},
@@ -1083,19 +1079,15 @@ function renderGrid() {
           return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
         },
         editor: 'list',
-        editorParams: {
-          autocomplete: true,
-          listOnEmpty: true,
-          values: function(cell) {
-            const d = cell.getRow().getData();
-            if (!d.formType || !d.matType) return [];
-            const combo = comboCache[comboKey(d.formType, d.matType)];
-            if (!combo) {
-              ensureComboLoaded(d.formType, d.matType).then(() => cell.getRow().reformat());
-              return [];
-            }
-            return combo.materials || [];
+        editorParams: function(cell) {
+          const d = cell.getRow().getData();
+          if (!d.formType || !d.matType) return {values: []};
+          const combo = comboCache[comboKey(d.formType, d.matType)];
+          if (!combo) {
+            ensureComboLoaded(d.formType, d.matType).then(() => cell.getRow().reformat());
+            return {values: []};
           }
+          return {values: combo.materials || [], autocomplete: true, listOnEmpty: true};
         },
         cellEdited: makeCascadeEditHandler('Material', 'material', [], {label: 'Material'}),
         cssClass: 'editable-cell'},
