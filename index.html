@@ -326,7 +326,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.12</span> — Fixed Unit WT formula to match Zoho workflow exactly: uses Length_INCH.Result and Width_FT.Width numeric fields from the lookup records (not the ID or parsed label). Was producing huge numbers in v2.11 for panel rows.
+  <span id="build-tag-display">v2.13</span> — All 4 calcs now client-side: Unit WT, Tot WT, Area, Galv LB. Toggling SA/Galv recomputes instantly. Skips refetch on dimension/qty/SA/Galv edits.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -337,7 +337,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.12 (2026-05-22)";
+const BUILD_TAG = "v2.13 (2026-05-22)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -400,11 +400,12 @@ async function ensureComboLoaded(formTypeId, matTypeId) {
       value: String(r.id),
       specId: String(r.specId ?? '')
     })).sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
-    // Capture weight/dim metadata for client-side weight calc.
+    // Capture weight / dim / surface-area-per-ft metadata for client-side calc.
     for (const r of matRows) {
       materialMetaById[String(r.id)] = {
-        weight_per_ft: Number(r.weightPerFt) || 0,
-        dim1: Number(r.dim1) || 0,
+        weight_per_ft:       Number(r.weightPerFt)       || 0,
+        dim1:                Number(r.dim1)              || 0,
+        surface_area_per_ft: Number(r.surfaceAreaPerFt)  || 0,
       };
     }
     comboCache[key] = { specs, materials, loading: false };
@@ -659,11 +660,16 @@ function makeEditHandler(fieldLinkName, dataKey, opts) {
         // Path B: compute calcs client-side, update cell display, no refetch round-trip.
         const item = bomData.find(r => r.id === data.id);
         if (item) item[dataKey] = rawNew;
-        if (opts.recomputeWeights) {
-          const calc = computeBomWeights(row.getData());
+        if (opts.recomputeCalcs) {
+          const calc = computeBomCalcs(row.getData());
           if (calc) {
-            row.update({unitWt: calc.unitWt, totWt: calc.totWt});
-            if (item) { item.unitWt = calc.unitWt; item.totWt = calc.totWt; }
+            row.update({unitWt: calc.unitWt, totWt: calc.totWt, area: calc.area, galvLb: calc.galvLb});
+            if (item) {
+              item.unitWt = calc.unitWt;
+              item.totWt  = calc.totWt;
+              item.area   = calc.area;
+              item.galvLb = calc.galvLb;
+            }
           }
         }
         updateStats();
@@ -898,37 +904,63 @@ function plateFtWidthById(ftwId) {
   return Number(rec.Width) || 0;
 }
 
-// Client-side Unit Weight + Total Weight calc.
+// Client-side calc for Unit_Weight / CalcWeight (Tot WT) / Area / Galv_LB.
 // Mirrors the Zoho Bill_Of_Material recalc workflow:
 //   Linear: Unit_Weight = Weight_Per_Ft × (Length_FT + Length_INCH.Result / 12)
 //   Panel:  Unit_Weight = Weight_Per_Ft × ((Length_FT × 12 + Length_INCH.Result) × (Width_FT.Width × 12 + Width_INCH.Result)) / 144
 //   CalcWeight = Quantity × Unit_Weight
-// (Zoho workflow gates these behind `if CalcWeight != 0` — chicken-and-egg for new rows.
-//  Widget always computes, no gate.)
-function computeBomWeights(row) {
+//   Panel Area (if SA):  ((L_in × W_in) / 144) × 2 × Quantity   (top + bottom faces)
+//   Linear Area (if SA): Quantity × Surface_Area_Per_Ft × (Length_FT + Length_INCH.Result / 12)
+//   Galv_LB = CalcWeight when Galv ticked, else 0
+//     (NB: Zoho workflow has bug `if (row.Galv = true)` — assignment, not comparison.
+//      That makes Galv_LB always set even when unchecked. Widget uses correct
+//      boolean check; if you ever want to mirror the buggy behavior, ping me.)
+// (Zoho workflow gates the whole unit-weight block behind `if CalcWeight != 0` —
+//  chicken-and-egg for new rows. Widget always computes, no gate.)
+function computeBomCalcs(row) {
   if (!row?.material) return null;
   const meta = materialMetaById[row.material];
   if (!meta || !meta.weight_per_ft) return null;
   const wpf = meta.weight_per_ft;
+  const sapf = meta.surface_area_per_ft || 0;
 
-  const lengthFt    = Number(row.ftL) || 0;       // direct number
-  const lengthInRes = inchResultById(row.inchL);  // decimal inches
+  const lengthFt    = Number(row.ftL) || 0;
+  const lengthInRes = inchResultById(row.inchL);
+  const qty         = Number(row.qty) || 0;
+  const totalLenFt  = lengthFt + lengthInRes / 12;   // total length in feet
 
-  let unitWt;
+  let unitWt, areaOneSidedSqFt;
   if (isPanelRow(row)) {
-    const widthFt    = plateFtWidthById(row.ftW); // numeric feet from lookup.Width
-    const widthInRes = inchResultById(row.inchW); // decimal inches
+    const widthFt    = plateFtWidthById(row.ftW);
+    const widthInRes = inchResultById(row.inchW);
     const lengthIn   = lengthFt * 12 + lengthInRes;
     const widthIn    = widthFt  * 12 + widthInRes;
-    unitWt = wpf * (lengthIn * widthIn) / 144;
+    unitWt           = wpf * (lengthIn * widthIn) / 144;
+    areaOneSidedSqFt = (lengthIn * widthIn) / 144;
   } else {
-    unitWt = wpf * (lengthFt + lengthInRes / 12);
+    unitWt           = wpf * totalLenFt;
+    areaOneSidedSqFt = 0;  // Linear uses Surface_Area_Per_Ft × length, not 2-sided area
   }
-  const qty = Number(row.qty) || 0;
   const totWt = unitWt * qty;
+
+  // Area — only meaningful if SA checkbox is on; per Zoho workflow.
+  let area = 0;
+  if (row.sa === true) {
+    if (isPanelRow(row)) {
+      area = areaOneSidedSqFt * 2 * qty;   // top + bottom faces
+    } else {
+      area = qty * sapf * totalLenFt;
+    }
+  }
+
+  // Galv_LB — only set if Galv checkbox is on.
+  const galvLb = row.galv === true ? totWt : 0;
+
   return {
     unitWt: Math.round(unitWt * 100) / 100,
     totWt:  Math.round(totWt  * 100) / 100,
+    area:   Math.round(area   * 100) / 100,
+    galvLb: Math.round(galvLb * 100) / 100,
   };
 }
 
@@ -1311,42 +1343,42 @@ function renderGrid() {
         cssClass: 'editable-cell'},
       {title: 'QTY',      field: 'qty',       width: 75,  hozAlign: 'right',
         editor: 'number', editorParams: {min: 0, step: 1},
-        cellEdited: makeEditHandler('Quantity', 'qty', {label: 'QTY', validate: nonNegNumber, skipRefetch: true, recomputeWeights: true}),
+        cellEdited: makeEditHandler('Quantity', 'qty', {label: 'QTY', validate: nonNegNumber, skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'FT (L)',   field: 'ftL',       width: 80,  hozAlign: 'right',
         editor: 'number', editorParams: {min: 0, step: 1},
-        cellEdited: makeEditHandler('Length_FT', 'ftL', {label: 'FT (L)', validate: nonNegNumber, skipRefetch: true, recomputeWeights: true}),
+        cellEdited: makeEditHandler('Length_FT', 'ftL', {label: 'FT (L)', validate: nonNegNumber, skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'INCH (L)', field: 'inchL',     width: 100,
         formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_INCH].optionsList},
-        cellEdited: makeEditHandler('Length_INCH', 'inchL', {label: 'INCH (L)', skipRefetch: true, recomputeWeights: true}),
+        cellEdited: makeEditHandler('Length_INCH', 'inchL', {label: 'INCH (L)', skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'FT (W)',   field: 'ftW',       width: 80,
         formatter: (cell) => lookupCache[LOOKUP_PLATE_FT_W].byId[cell.getValue()] || '',
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_PLATE_FT_W].optionsList},
         editable: (cell) => isPanelRow(cell.getRow().getData()),
-        cellEdited: makeEditHandler('Width_FT', 'ftW', {label: 'FT (W)', skipRefetch: true, recomputeWeights: true}),
+        cellEdited: makeEditHandler('Width_FT', 'ftW', {label: 'FT (W)', skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'INCH (W)', field: 'inchW',     width: 100,
         formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_INCH].optionsList},
         editable: (cell) => isPanelRow(cell.getRow().getData()),
-        cellEdited: makeEditHandler('Width_INCH', 'inchW', {label: 'INCH (W)', skipRefetch: true, recomputeWeights: true}),
+        cellEdited: makeEditHandler('Width_INCH', 'inchW', {label: 'INCH (W)', skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'Unit WT',  field: 'unitWt',    width: 100, hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Tot WT',   field: 'totWt',     width: 110, hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Area',     field: 'area',      width: 90,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'SA',       field: 'sa',        width: 45,  hozAlign: 'center', formatter: 'tickCross',
         editor: 'tickCross',
-        cellEdited: makeEditHandler('Plate_SA', 'sa', {label: 'SA', toApi: boolToApi}),
+        cellEdited: makeEditHandler('Plate_SA', 'sa', {label: 'SA', toApi: boolToApi, skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'Galv',     field: 'galv',      width: 65,  hozAlign: 'center', formatter: 'tickCross',
         editor: 'tickCross',
-        cellEdited: makeEditHandler('Galv', 'galv', {label: 'Galv', toApi: boolToApi}),
+        cellEdited: makeEditHandler('Galv', 'galv', {label: 'Galv', toApi: boolToApi, skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'Galv LB',  field: 'galvLb',    width: 95,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Supplied', field: 'supplied',  width: 130,
