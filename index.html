@@ -326,7 +326,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.10</span> — Component (per-project) + Drawing (per-component cascade) are now editable dropdowns. Component cellEdited clears Drawing.
+  <span id="build-tag-display">v2.11</span> — Client-side Unit WT + Tot WT calc (Path B). QTY/FT/INCH edits compute weights instantly + skip refetch (1 API call per edit instead of 2). Area/Galv LB still server-computed on next load.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -337,7 +337,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.10 (2026-05-22)";
+const BUILD_TAG = "v2.11 (2026-05-22)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -400,6 +400,13 @@ async function ensureComboLoaded(formTypeId, matTypeId) {
       value: String(r.id),
       specId: String(r.specId ?? '')
     })).sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
+    // Capture weight/dim metadata for client-side weight calc.
+    for (const r of matRows) {
+      materialMetaById[String(r.id)] = {
+        weight_per_ft: Number(r.weightPerFt) || 0,
+        dim1: Number(r.dim1) || 0,
+      };
+    }
     comboCache[key] = { specs, materials, loading: false };
     // Mirror into lookupCache byId so existing formatters keep working
     for (const r of specRows) lookupCache[LOOKUP_MFD].byId[String(r.id)] = String(r.typeDetail ?? '');
@@ -648,13 +655,27 @@ function makeEditHandler(fieldLinkName, dataKey, opts) {
         throw new Error('Bad response: ' + JSON.stringify(resp));
       }
 
-      try {
-        await refetchAndUpdateRow(row, data.id);
-      } catch (refetchErr) {
-        console.warn('[BOM Editor] Save OK but refetch failed:', refetchErr);
+      if (opts.skipRefetch) {
+        // Path B: compute calcs client-side, update cell display, no refetch round-trip.
         const item = bomData.find(r => r.id === data.id);
         if (item) item[dataKey] = rawNew;
+        if (opts.recomputeWeights) {
+          const calc = computeBomWeights(row.getData());
+          if (calc) {
+            row.update({unitWt: calc.unitWt, totWt: calc.totWt});
+            if (item) { item.unitWt = calc.unitWt; item.totWt = calc.totWt; }
+          }
+        }
         updateStats();
+      } else {
+        try {
+          await refetchAndUpdateRow(row, data.id);
+        } catch (refetchErr) {
+          console.warn('[BOM Editor] Save OK but refetch failed:', refetchErr);
+          const item = bomData.find(r => r.id === data.id);
+          if (item) item[dataKey] = rawNew;
+          updateStats();
+        }
       }
 
       recentlyEdited.add(data.id);
@@ -850,6 +871,61 @@ async function loadFormTypes() {
 function isPanelRow(rowData) {
   if (!rowData?.formType) return false;
   return lookupCache[LOOKUP_FORM_TYPE].measurementById?.[rowData.formType] === 'Panel';
+}
+
+// Material metadata for client-side weight calculation.
+// Keyed by material id; populated from Railway /api/bom-lookups/materials response.
+const materialMetaById = {};
+
+// Parse an INCH lookup display label like "0-3/4", "5-7/8", "1/2", "6" into a decimal inch value.
+function parseInchLabel(lbl) {
+  if (lbl == null) return 0;
+  const s = String(lbl).replace(/["']/g, '').trim();
+  if (!s) return 0;
+  if (s.includes('-')) {
+    const [w, frac] = s.split('-');
+    const whole = parseFloat(w) || 0;
+    if (frac && frac.includes('/')) {
+      const [n, d] = frac.split('/');
+      return whole + ((parseFloat(n) || 0) / (parseFloat(d) || 1));
+    }
+    return whole;
+  }
+  if (s.includes('/')) {
+    const [n, d] = s.split('/');
+    return (parseFloat(n) || 0) / (parseFloat(d) || 1);
+  }
+  return parseFloat(s) || 0;
+}
+
+function inchIdToDecimal(inchId) {
+  if (!inchId) return 0;
+  return parseInchLabel(lookupCache[LOOKUP_INCH]?.byId?.[inchId]);
+}
+
+// Client-side Unit Weight + Total Weight calc — mirrors Nesting App's calcStockWt.
+// For Linear forms: unit_wt = weight_per_ft × (total_length_in / 12)
+// For Panel forms:  unit_wt = (length_in × width_in / 144) × weight_per_ft   (weight per sqft)
+// Returns {unitWt, totWt} rounded to 2 decimals. Returns null if we can't compute (missing material weight).
+function computeBomWeights(row) {
+  if (!row?.material) return null;
+  const meta = materialMetaById[row.material];
+  if (!meta || !meta.weight_per_ft) return null;
+  const wpf = meta.weight_per_ft;
+  const lengthIn = (Number(row.ftL) || 0) * 12 + inchIdToDecimal(row.inchL);
+  let unitWt;
+  if (isPanelRow(row)) {
+    const widthIn = (Number(row.ftW) || 0) * 12 + inchIdToDecimal(row.inchW);
+    unitWt = (lengthIn * widthIn / 144) * wpf;
+  } else {
+    unitWt = wpf * (lengthIn / 12);
+  }
+  const qty = Number(row.qty) || 0;
+  const totWt = unitWt * qty;
+  return {
+    unitWt: Math.round(unitWt * 100) / 100,
+    totWt:  Math.round(totWt  * 100) / 100,
+  };
 }
 
 // Per-component drawings cache. Keyed by componentId.
@@ -1231,31 +1307,31 @@ function renderGrid() {
         cssClass: 'editable-cell'},
       {title: 'QTY',      field: 'qty',       width: 75,  hozAlign: 'right',
         editor: 'number', editorParams: {min: 0, step: 1},
-        cellEdited: makeEditHandler('Quantity', 'qty', {label: 'QTY', validate: nonNegNumber}),
+        cellEdited: makeEditHandler('Quantity', 'qty', {label: 'QTY', validate: nonNegNumber, skipRefetch: true, recomputeWeights: true}),
         cssClass: 'editable-cell'},
       {title: 'FT (L)',   field: 'ftL',       width: 80,  hozAlign: 'right',
         editor: 'number', editorParams: {min: 0, step: 1},
-        cellEdited: makeEditHandler('Length_FT', 'ftL', {label: 'FT (L)', validate: nonNegNumber}),
+        cellEdited: makeEditHandler('Length_FT', 'ftL', {label: 'FT (L)', validate: nonNegNumber, skipRefetch: true, recomputeWeights: true}),
         cssClass: 'editable-cell'},
       {title: 'INCH (L)', field: 'inchL',     width: 100,
         formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_INCH].optionsList},
-        cellEdited: makeEditHandler('Length_INCH', 'inchL', {label: 'INCH (L)'}),
+        cellEdited: makeEditHandler('Length_INCH', 'inchL', {label: 'INCH (L)', skipRefetch: true, recomputeWeights: true}),
         cssClass: 'editable-cell'},
       {title: 'FT (W)',   field: 'ftW',       width: 80,
         formatter: (cell) => lookupCache[LOOKUP_PLATE_FT_W].byId[cell.getValue()] || '',
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_PLATE_FT_W].optionsList},
         editable: (cell) => isPanelRow(cell.getRow().getData()),
-        cellEdited: makeEditHandler('Width_FT', 'ftW', {label: 'FT (W)'}),
+        cellEdited: makeEditHandler('Width_FT', 'ftW', {label: 'FT (W)', skipRefetch: true, recomputeWeights: true}),
         cssClass: 'editable-cell'},
       {title: 'INCH (W)', field: 'inchW',     width: 100,
         formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_INCH].optionsList},
         editable: (cell) => isPanelRow(cell.getRow().getData()),
-        cellEdited: makeEditHandler('Width_INCH', 'inchW', {label: 'INCH (W)'}),
+        cellEdited: makeEditHandler('Width_INCH', 'inchW', {label: 'INCH (W)', skipRefetch: true, recomputeWeights: true}),
         cssClass: 'editable-cell'},
       {title: 'Unit WT',  field: 'unitWt',    width: 100, hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Tot WT',   field: 'totWt',     width: 110, hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
