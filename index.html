@@ -326,7 +326,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.9</span> — Supplied + Finish are now dropdowns. FT(W)/INCH(W) only editable for Panel form types (Plate, Sheet, Tread Plate). Linear forms (Beam, Angle, etc.) skip width.
+  <span id="build-tag-display">v2.10</span> — Component (per-project) + Drawing (per-component cascade) are now editable dropdowns. Component cellEdited clears Drawing.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -337,7 +337,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.9 (2026-05-22)";
+const BUILD_TAG = "v2.10 (2026-05-22)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -364,6 +364,7 @@ const LOOKUP_FORM_TYPE    = 'Form_Types_Report';
 const LOOKUP_MAT_TYPE     = 'Material_Types_Report';
 const LOOKUP_MFD          = 'Material_Form_Detail_Report';
 const LOOKUP_MATERIAL     = 'Beam_Channel_Tee_Lookup_Report';
+const LOOKUP_COMPONENT    = 'Project_Components';
 const lookupCache = {
   [LOOKUP_INCH]:       { byId: {}, displayField: null, optionsList: [] },
   [LOOKUP_PLATE_FT_W]: { byId: {}, displayField: null, optionsList: [] },
@@ -371,6 +372,7 @@ const lookupCache = {
   [LOOKUP_MAT_TYPE]:   { byId: {}, optionsList: [] },
   [LOOKUP_MFD]:        { byId: {}, records: [] },
   [LOOKUP_MATERIAL]:   { byId: {}, records: [] },
+  [LOOKUP_COMPONENT]:  { byId: {}, optionsList: [] },
 };
 
 // Per-combo cache for spec + material dropdowns. Keyed by "formTypeId|matTypeId".
@@ -447,8 +449,10 @@ function mapRecord(r, idx) {
     recordId:     r.ID,
     lineItem:     Number(r.Line_Item) || idx + 1,
     tag:          r.BOM_Item || '',
-    component:    lookupDisplay(r.Component),
-    drawing:      lookupDisplay(r.Scope_LU),
+    component:    readLookupId(r.Component),
+    componentLbl: lookupDisplay(r.Component),
+    drawing:      readLookupId(r.Scope_LU),
+    drawingLbl:   lookupDisplay(r.Scope_LU),
     formType:     readLookupId(r.Form_Type),
     formTypeLbl:  lookupDisplay(r.Form_Type),
     matType:      readLookupId(r.Material_Type),
@@ -848,6 +852,46 @@ function isPanelRow(rowData) {
   return lookupCache[LOOKUP_FORM_TYPE].measurementById?.[rowData.formType] === 'Panel';
 }
 
+// Per-component drawings cache. Keyed by componentId.
+// Project_Drawing_Details records are filtered by Components == componentId.
+const drawingsByComponent = {};
+async function ensureDrawingsLoaded(componentId) {
+  if (!componentId) return null;
+  if (drawingsByComponent[componentId]) return drawingsByComponent[componentId];
+  drawingsByComponent[componentId] = { options: [], loading: true };
+  try {
+    const rows = await fetchRailwayLookup('/api/bom-lookups/drawings?component_id=' + encodeURIComponent(componentId));
+    const options = rows
+      .map(r => ({label: String(r.label ?? ''), value: String(r.id)}))
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
+    drawingsByComponent[componentId] = { options, loading: false };
+    // Mirror labels into a separate byId map for the Drawing cell formatter
+    for (const r of rows) drawingDisplayById[String(r.id)] = String(r.label ?? '');
+    console.log('[BOM Editor] drawings for component', componentId, '→', options.length);
+    return drawingsByComponent[componentId];
+  } catch (err) {
+    console.error('[BOM Editor] drawings load failed for component', componentId, err);
+    delete drawingsByComponent[componentId];
+    return null;
+  }
+}
+const drawingDisplayById = {};
+
+async function loadComponentsForProject(pid) {
+  const rows = await fetchRailwayLookup('/api/bom-lookups/components?project_id=' + encodeURIComponent(pid));
+  const cache = lookupCache[LOOKUP_COMPONENT];
+  cache.byId = {};
+  cache.optionsList = [];
+  for (const r of rows) {
+    const id = String(r.id);
+    const lbl = String(r.label ?? '');
+    cache.byId[id] = lbl;
+    cache.optionsList.push({label: lbl, value: id});
+  }
+  cache.optionsList.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
+  console.log('[BOM Editor]', LOOKUP_COMPONENT, '(via Railway) →', cache.optionsList.length, 'components for this project');
+}
+
 async function loadMaterialTypes() {
   const rows = await fetchRailwayLookup('/api/bom-lookups/material-types');
   const cache = lookupCache[LOOKUP_MAT_TYPE];
@@ -968,10 +1012,36 @@ async function loadLookups() {
     loadOneLookup(LOOKUP_PLATE_FT_W).catch(err    => console.error('[BOM Editor]', LOOKUP_PLATE_FT_W, 'fetch failed:', err)),
     loadFormTypes().catch(err                     => console.error('[BOM Editor]', LOOKUP_FORM_TYPE, 'fetch failed:', err)),
     loadMaterialTypes().catch(err                 => console.error('[BOM Editor]', LOOKUP_MAT_TYPE, 'fetch failed:', err)),
+    loadComponentsForProject(projectId).catch(err => console.error('[BOM Editor]', LOOKUP_COMPONENT, 'fetch failed:', err)),
   ]);
   // material-form-detail + materials are NOT preloaded — they're huge (>10k rows total
   // across all form types). Instead they're fetched on demand per Form+MatType combo via
   // ensureComboLoaded — see preloadCombosFromBOM() called after BOM rows render.
+  // Drawings are similarly per-component, fetched on demand via ensureDrawingsLoaded.
+}
+
+async function preloadDrawingsFromBOM() {
+  if (!Array.isArray(bomData)) return;
+  const seen = new Set();
+  const componentIds = [];
+  for (const row of bomData) {
+    if (row.component && !seen.has(row.component)) {
+      seen.add(row.component);
+      componentIds.push(row.component);
+    }
+  }
+  if (!componentIds.length) return;
+  console.log('[BOM Editor] preloading drawings for', componentIds.length, 'unique component(s)');
+  const CONCURRENCY = 3;
+  let idx = 0;
+  async function worker() {
+    while (idx < componentIds.length) {
+      const c = componentIds[idx++];
+      try { await ensureDrawingsLoaded(c); } catch (e) { /* logged inside */ }
+    }
+  }
+  await Promise.all(Array.from({length: CONCURRENCY}, () => worker()));
+  if (table) table.redraw(true);
 }
 
 async function preloadCombosFromBOM() {
@@ -1025,6 +1095,7 @@ async function loadBOM() {
     document.getElementById('bom-table').style.display = 'block';
     renderGrid();
     preloadCombosFromBOM().catch(err => console.error('[BOM Editor] preloadCombosFromBOM failed:', err));
+    preloadDrawingsFromBOM().catch(err => console.error('[BOM Editor] preloadDrawingsFromBOM failed:', err));
   } catch (err) {
     showError('Failed to load BOM rows.', err);
   }
@@ -1053,8 +1124,35 @@ function renderGrid() {
         editor: 'input',
         cellEdited: makeEditHandler('BOM_Item', 'tag', {label: 'Tag'}),
         cssClass: 'editable-cell'},
-      {title: 'Component',field: 'component', width: 130, formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
-      {title: 'Drawing',  field: 'drawing',   width: 130, formatter: (c) => c.getValue() ? `<span class="lookup-cell">${c.getValue()}</span>` : ''},
+      {title: 'Component',field: 'component', width: 160,
+        formatter: (c) => {
+          const lbl = lookupCache[LOOKUP_COMPONENT].byId[c.getValue()] || c.getRow().getData().componentLbl || '';
+          return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
+        },
+        editor: 'list',
+        editorParams: {values: lookupCache[LOOKUP_COMPONENT].optionsList, autocomplete: true, listOnEmpty: true},
+        cellEdited: makeCascadeEditHandler('Component', 'component', [
+          {dataKey: 'drawing', fieldLinkName: 'Scope_LU'},
+        ], {label: 'Component'}),
+        cssClass: 'editable-cell'},
+      {title: 'Drawing',  field: 'drawing',   width: 140,
+        formatter: (c) => {
+          const lbl = drawingDisplayById[c.getValue()] || c.getRow().getData().drawingLbl || '';
+          return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
+        },
+        editor: 'list',
+        editorParams: function(cell) {
+          const d = cell.getRow().getData();
+          if (!d.component) return {values: []};
+          const entry = drawingsByComponent[d.component];
+          if (!entry) {
+            ensureDrawingsLoaded(d.component).then(() => cell.getRow().reformat());
+            return {values: []};
+          }
+          return {values: entry.options || [], autocomplete: true, listOnEmpty: true};
+        },
+        cellEdited: makeEditHandler('Scope_LU', 'drawing', {label: 'Drawing'}),
+        cssClass: 'editable-cell'},
       {title: 'Form',     field: 'formType',  width: 110,
         formatter: (c) => {
           const lbl = lookupCache[LOOKUP_FORM_TYPE].byId[c.getValue()] || c.getRow().getData().formTypeLbl || '';
