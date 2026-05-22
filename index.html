@@ -326,7 +326,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.8</span> — Column widths tweaked + Delete column narrowed + Add Row button (top of toolbar). Defaults: next line number + linked to current project.
+  <span id="build-tag-display">v2.9</span> — Supplied + Finish are now dropdowns. FT(W)/INCH(W) only editable for Panel form types (Plate, Sheet, Tread Plate). Linear forms (Beam, Angle, etc.) skip width.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -337,7 +337,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.8 (2026-05-22)";
+const BUILD_TAG = "v2.9 (2026-05-22)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -828,15 +828,24 @@ async function loadFormTypes() {
   const rows = await fetchRailwayLookup('/api/bom-lookups/form-types');
   const cache = lookupCache[LOOKUP_FORM_TYPE];
   cache.byId = {};
+  cache.measurementById = {};  // formTypeId -> "Linear" | "Panel"
   cache.optionsList = [];
   for (const r of rows) {
     const id  = String(r.id);
     const lbl = String(r.label ?? '');
     cache.byId[id] = lbl;
+    cache.measurementById[id] = String(r.measurement ?? '');
     cache.optionsList.push({label: lbl, value: id});
   }
   cache.optionsList.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
   console.log('[BOM Editor]', LOOKUP_FORM_TYPE, '(via Railway) →', cache.optionsList.length, 'active form types');
+}
+
+// Width fields (FT W, INCH W) are only editable for "Panel" form types (Plate, Sheet, etc.).
+// Linear form types (Beam, Channel, Angle, Tube, etc.) only need length, no width.
+function isPanelRow(rowData) {
+  if (!rowData?.formType) return false;
+  return lookupCache[LOOKUP_FORM_TYPE].measurementById?.[rowData.formType] === 'Panel';
 }
 
 async function loadMaterialTypes() {
@@ -1140,12 +1149,14 @@ function renderGrid() {
         formatter: (cell) => lookupCache[LOOKUP_PLATE_FT_W].byId[cell.getValue()] || '',
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_PLATE_FT_W].optionsList},
+        editable: (cell) => isPanelRow(cell.getRow().getData()),
         cellEdited: makeEditHandler('Width_FT', 'ftW', {label: 'FT (W)'}),
         cssClass: 'editable-cell'},
       {title: 'INCH (W)', field: 'inchW',     width: 100,
         formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_INCH].optionsList},
+        editable: (cell) => isPanelRow(cell.getRow().getData()),
         cellEdited: makeEditHandler('Width_INCH', 'inchW', {label: 'INCH (W)'}),
         cssClass: 'editable-cell'},
       {title: 'Unit WT',  field: 'unitWt',    width: 100, hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
@@ -1160,8 +1171,27 @@ function renderGrid() {
         cellEdited: makeEditHandler('Galv', 'galv', {label: 'Galv', toApi: boolToApi}),
         cssClass: 'editable-cell'},
       {title: 'Galv LB',  field: 'galvLb',    width: 95,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
-      {title: 'Supplied', field: 'supplied',  width: 130},
-      {title: 'Finish',   field: 'finish',    width: 120},
+      {title: 'Supplied', field: 'supplied',  width: 130,
+        editor: 'list',
+        editorParams: {values: [
+          {label: 'Manufacture', value: 'Manufacture'},
+          {label: 'Client',      value: 'Client'},
+        ]},
+        cellEdited: makeEditHandler('Supplied', 'supplied', {label: 'Supplied'}),
+        cssClass: 'editable-cell'},
+      {title: 'Finish',   field: 'finish',    width: 120,
+        editor: 'list',
+        editorParams: {values: [
+          {label: 'Anodize',       value: 'Anodize'},
+          {label: 'Blast Only',    value: 'Blast Only'},
+          {label: 'Blast & Paint', value: 'Blast & Paint'},
+          {label: 'Galvanize',     value: 'Galvanize'},
+          {label: 'Paint Only',    value: 'Paint Only'},
+          {label: 'Plain',         value: 'Plain'},
+          {label: 'Powder Coat',   value: 'Powder Coat'},
+        ]},
+        cellEdited: makeEditHandler('Finish', 'finish', {label: 'Finish'}),
+        cssClass: 'editable-cell'},
       {title: 'Allocated',field: 'allocatedAmt', width: 105, hozAlign: 'right', formatter: (c) => `$${(c.getValue()||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`},
       {title: '', field: 'deleted', width: 55, hozAlign: 'center', headerSort: false, frozen: true,
         formatter: (cell) => {
