@@ -326,7 +326,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.11</span> — Client-side Unit WT + Tot WT calc (Path B). QTY/FT/INCH edits compute weights instantly + skip refetch (1 API call per edit instead of 2). Area/Galv LB still server-computed on next load.
+  <span id="build-tag-display">v2.12</span> — Fixed Unit WT formula to match Zoho workflow exactly: uses Length_INCH.Result and Width_FT.Width numeric fields from the lookup records (not the ID or parsed label). Was producing huge numbers in v2.11 for panel rows.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -337,7 +337,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.11 (2026-05-22)";
+const BUILD_TAG = "v2.12 (2026-05-22)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -794,12 +794,14 @@ async function loadOneLookup(reportName) {
 
   const cache = lookupCache[reportName];
   cache.displayField = displayField;
-  cache.byId        = {};
-  cache.optionsList = [];
+  cache.byId         = {};
+  cache.optionsList  = [];
+  cache.recordsById  = {};  // Full Zoho record kept by ID so we can read numeric fields like Result / Width
   for (const r of rows) {
     const id  = String(r.ID);
     const lbl = String(r[displayField] ?? '');
     cache.byId[id] = lbl;
+    cache.recordsById[id] = r;
     cache.optionsList.push({label: lbl, value: id});
   }
   cache.optionsList.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
@@ -877,48 +879,50 @@ function isPanelRow(rowData) {
 // Keyed by material id; populated from Railway /api/bom-lookups/materials response.
 const materialMetaById = {};
 
-// Parse an INCH lookup display label like "0-3/4", "5-7/8", "1/2", "6" into a decimal inch value.
-function parseInchLabel(lbl) {
-  if (lbl == null) return 0;
-  const s = String(lbl).replace(/["']/g, '').trim();
-  if (!s) return 0;
-  if (s.includes('-')) {
-    const [w, frac] = s.split('-');
-    const whole = parseFloat(w) || 0;
-    if (frac && frac.includes('/')) {
-      const [n, d] = frac.split('/');
-      return whole + ((parseFloat(n) || 0) / (parseFloat(d) || 1));
-    }
-    return whole;
-  }
-  if (s.includes('/')) {
-    const [n, d] = s.split('/');
-    return (parseFloat(n) || 0) / (parseFloat(d) || 1);
-  }
-  return parseFloat(s) || 0;
-}
-
-function inchIdToDecimal(inchId) {
+// Read numeric Result (decimal inches) from a Length_INCH_Lookups record by ID.
+// Mirrors Zoho workflow's row.Length_INCH.Result / row.Width_INCH.Result.
+function inchResultById(inchId) {
   if (!inchId) return 0;
-  return parseInchLabel(lookupCache[LOOKUP_INCH]?.byId?.[inchId]);
+  const rec = lookupCache[LOOKUP_INCH]?.recordsById?.[inchId];
+  if (!rec) return 0;
+  // Field is named "Result" on the lookup form per the Zoho recalc workflow.
+  return Number(rec.Result) || 0;
 }
 
-// Client-side Unit Weight + Total Weight calc — mirrors Nesting App's calcStockWt.
-// For Linear forms: unit_wt = weight_per_ft × (total_length_in / 12)
-// For Panel forms:  unit_wt = (length_in × width_in / 144) × weight_per_ft   (weight per sqft)
-// Returns {unitWt, totWt} rounded to 2 decimals. Returns null if we can't compute (missing material weight).
+// Read numeric Width (in feet) from a Plate_Standard_Sizes record by ID.
+// Mirrors Zoho workflow's row.Width_FT.Width.
+function plateFtWidthById(ftwId) {
+  if (!ftwId) return 0;
+  const rec = lookupCache[LOOKUP_PLATE_FT_W]?.recordsById?.[ftwId];
+  if (!rec) return 0;
+  return Number(rec.Width) || 0;
+}
+
+// Client-side Unit Weight + Total Weight calc.
+// Mirrors the Zoho Bill_Of_Material recalc workflow:
+//   Linear: Unit_Weight = Weight_Per_Ft × (Length_FT + Length_INCH.Result / 12)
+//   Panel:  Unit_Weight = Weight_Per_Ft × ((Length_FT × 12 + Length_INCH.Result) × (Width_FT.Width × 12 + Width_INCH.Result)) / 144
+//   CalcWeight = Quantity × Unit_Weight
+// (Zoho workflow gates these behind `if CalcWeight != 0` — chicken-and-egg for new rows.
+//  Widget always computes, no gate.)
 function computeBomWeights(row) {
   if (!row?.material) return null;
   const meta = materialMetaById[row.material];
   if (!meta || !meta.weight_per_ft) return null;
   const wpf = meta.weight_per_ft;
-  const lengthIn = (Number(row.ftL) || 0) * 12 + inchIdToDecimal(row.inchL);
+
+  const lengthFt    = Number(row.ftL) || 0;       // direct number
+  const lengthInRes = inchResultById(row.inchL);  // decimal inches
+
   let unitWt;
   if (isPanelRow(row)) {
-    const widthIn = (Number(row.ftW) || 0) * 12 + inchIdToDecimal(row.inchW);
-    unitWt = (lengthIn * widthIn / 144) * wpf;
+    const widthFt    = plateFtWidthById(row.ftW); // numeric feet from lookup.Width
+    const widthInRes = inchResultById(row.inchW); // decimal inches
+    const lengthIn   = lengthFt * 12 + lengthInRes;
+    const widthIn    = widthFt  * 12 + widthInRes;
+    unitWt = wpf * (lengthIn * widthIn) / 144;
   } else {
-    unitWt = wpf * (lengthIn / 12);
+    unitWt = wpf * (lengthFt + lengthInRes / 12);
   }
   const qty = Number(row.qty) || 0;
   const totWt = unitWt * qty;
