@@ -91,10 +91,11 @@
     background: #c62828;
     border: 1px solid #b71c1c;
     color: #fff;
-    margin-left: 3px;
-    padding: 1px 5px;
+    margin-left: 2px;
+    padding: 1px 4px;
     font-size: 12px;
     line-height: 1;
+    min-width: 18px;
   }
   .row-action-btn.delete-perm:hover { background: #b71c1c; }
 
@@ -269,11 +270,13 @@
     background: none;
     border: 1px solid transparent;
     border-radius: 3px;
-    padding: 2px 8px;
-    font: 500 11px inherit;
+    padding: 1px 4px;
+    font: 500 13px inherit;
     font-family: 'DM Sans', sans-serif;
     cursor: pointer;
     text-decoration: none !important;
+    min-width: 18px;
+    line-height: 1;
   }
   .row-action-btn.delete  { color: #bc0f0f; }
   .row-action-btn.restore { color: #2f7d3b; }
@@ -463,7 +466,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.16</span> — Custom confirm modal (no browser branding) + Delete column narrower with icon buttons + blank QTY/FT/INCH cells show 0 instead of empty.
+  <span id="build-tag-display">v2.16.1</span> — Delete column down to 50px (icon-only buttons in both states). Hover tooltips explain each.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -486,7 +489,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.16 (2026-05-23)";
+const BUILD_TAG = "v2.16.1 (2026-05-23)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1616,12 +1619,12 @@ function renderGrid() {
         cellEdited: makeEditHandler('Finish', 'finish', {label: 'Finish'}),
         cssClass: 'editable-cell'},
       {title: 'Allocated',field: 'allocatedAmt', width: 105, hozAlign: 'right', formatter: (c) => `$${(c.getValue()||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`},
-      {title: '', field: 'deleted', width: 70, hozAlign: 'center', headerSort: false, frozen: true,
+      {title: '', field: 'deleted', width: 50, minWidth: 50, hozAlign: 'center', headerSort: false, frozen: true, resizable: false,
         formatter: (cell) => {
           const d = cell.getData();
           return d.deleted
             ? '<button class="row-action-btn restore" data-action="restore" title="Restore row">↺</button><button class="row-action-btn delete-perm" data-action="hard-delete" title="Permanently delete — cannot be undone">✕</button>'
-            : '<button class="row-action-btn delete"  data-action="delete" title="Mark row for delete (soft)">Del</button>';
+            : '<button class="row-action-btn delete"  data-action="delete" title="Mark row for delete (soft)">✕</button>';
         },
         cellClick: (e, cell) => {
           const btn = e.target.closest('button[data-action]');
