@@ -64,6 +64,18 @@
   .btn-ghost { background: #fff; color: #444; border: 1px solid #d0d0d0; }
   .btn-ghost:hover { background: #e8e8e8; }
 
+  .view-select {
+    border: 1px solid #d0d0d0;
+    background: #fff;
+    color: #444;
+    font-family: inherit;
+    font-size: 12px;
+    padding: 7px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-left: 8px;
+  }
+  .view-select:hover { background: #f4f4f4; }
   .view-toggle {
     display: inline-flex;
     background: #f0f0f0;
@@ -308,11 +320,13 @@
 
 <div class="toolbar">
   <button class="btn btn-ghost" id="back">← Back to Project</button>
-  <button class="btn btn-ghost" id="add-row" title="Add a new BOM row to this project">+ Add Row</button>
-  <div class="view-toggle">
-    <button id="view-flat" class="active">Flat</button>
-    <button id="view-grouped">Grouped</button>
-  </div>
+  <button class="btn btn-ghost" id="add-row" title="Add a new BOM row at top, carrying forward Form / Mat Type / Spec / Material / Component / Drawing / Supplied / Finish from your last added row">+ Add Row</button>
+  <select id="view-mode" class="view-select" title="Group rows by Tag prefix, Form Type, or Component">
+    <option value="flat">View: Flat</option>
+    <option value="tag">Group by Tag</option>
+    <option value="form">Group by Form</option>
+    <option value="component">Group by Component</option>
+  </select>
   <button class="btn btn-ghost" id="toggle-hide-deleted" title="Hide rows marked for deletion">Hide deleted</button>
   <input type="text" class="filter-input" id="filter-input" placeholder="Filter rows...">
   <button class="btn btn-primary" id="save-project" disabled title="Commit pending changes and recalculate project totals">Save to Project</button>
@@ -326,7 +340,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.13</span> — All 4 calcs now client-side: Unit WT, Tot WT, Area, Galv LB. Toggling SA/Galv recomputes instantly. Skips refetch on dimension/qty/SA/Galv edits.
+  <span id="build-tag-display">v2.14</span> — Add Row inserts at TOP + carries forward classification fields from last add. View dropdown: Flat / Group by Tag / Group by Form / Group by Component.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -337,7 +351,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.13 (2026-05-22)";
+const BUILD_TAG = "v2.14 (2026-05-23)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1427,24 +1441,36 @@ function renderGrid() {
   });
 }
 
+function groupKeyForRow(row, mode) {
+  if (mode === 'tag') {
+    return row.assemblyGroup || '(no tag)';
+  }
+  if (mode === 'form') {
+    return lookupCache[LOOKUP_FORM_TYPE].byId[row.formType] || row.formTypeLbl || '(no form)';
+  }
+  if (mode === 'component') {
+    return lookupCache[LOOKUP_COMPONENT].byId[row.component] || row.componentLbl || '(no component)';
+  }
+  return null;
+}
+
 function applyView(view) {
   if (!table) return;
   currentView = view;
-  document.getElementById('view-flat').classList.toggle('active', view === 'flat');
-  document.getElementById('view-grouped').classList.toggle('active', view === 'grouped');
-  if (view === 'grouped') {
-    table.setGroupBy('assemblyGroup');
-    table.setGroupHeader(function(value, count, data) {
-      const groupWt = data.reduce((s,r) => s + (r.totWt || 0), 0);
-      return `${value} &nbsp;<span style="opacity:0.85; font-weight:400; font-size:11px;">— ${count} rows, ${Math.round(groupWt).toLocaleString()} lbs</span>`;
-    });
-  } else {
+  const sel = document.getElementById('view-mode');
+  if (sel && sel.value !== view) sel.value = view;
+  if (view === 'flat') {
     table.setGroupBy(false);
+    return;
   }
+  table.setGroupBy(row => groupKeyForRow(row, view));
+  table.setGroupHeader(function(value, count, data) {
+    const groupWt = data.reduce((s,r) => s + (r.totWt || 0), 0);
+    return `${value} &nbsp;<span style="opacity:0.85; font-weight:400; font-size:11px;">— ${count} rows, ${Math.round(groupWt).toLocaleString()} lbs</span>`;
+  });
 }
 
-document.getElementById('view-flat').addEventListener('click',    () => applyView('flat'));
-document.getElementById('view-grouped').addEventListener('click', () => applyView('grouped'));
+document.getElementById('view-mode').addEventListener('change', (e) => applyView(e.target.value));
 
 function applyAllFilters() {
   if (!table) return;
@@ -1480,6 +1506,11 @@ document.getElementById('back').addEventListener('click', () => {
 
 document.getElementById('add-row').addEventListener('click', addNewBomRow);
 
+// Track the most-recently-added row in this session so the next Add can carry
+// forward its classification fields (Form / Mat Type / Spec / Material / Component /
+// Drawing / Supplied / Finish). Dimensions + Tag + QTY stay blank.
+let lastAddedRowId = null;
+
 async function addNewBomRow() {
   const btn = document.getElementById('add-row');
   btn.disabled = true;
@@ -1487,32 +1518,50 @@ async function addNewBomRow() {
   btn.textContent = 'Adding...';
   try {
     const nextLineItem = Math.max(0, ...bomData.map(r => Number(r.lineItem) || 0)) + 1;
+    const payload = {
+      MCP_Customer_Project_Form: projectId,
+      Line_Item: nextLineItem,
+    };
+    // Carry-forward from last-added row's CURRENT state — saves re-picking material every add.
+    if (lastAddedRowId) {
+      const prev = bomData.find(r => r.id === lastAddedRowId);
+      if (prev) {
+        if (prev.formType)  payload.Form_Type     = prev.formType;
+        if (prev.matType)   payload.Material_Type = prev.matType;
+        if (prev.spec)      payload.Specification = prev.spec;
+        if (prev.material)  payload.Material      = prev.material;
+        if (prev.component) payload.Component     = prev.component;
+        if (prev.drawing)   payload.Scope_LU      = prev.drawing;
+        if (prev.supplied)  payload.Supplied      = prev.supplied;
+        if (prev.finish)    payload.Finish        = prev.finish;
+      }
+    }
     const resp = await ZOHO.CREATOR.API.addRecord({
       appName:  APP_NAME,
       formName: 'Project_Bill_Of_Material_Detail_Form',
-      data: { data: {
-        MCP_Customer_Project_Form: projectId,
-        Line_Item: nextLineItem,
-      }}
+      data: { data: payload }
     });
     if (!resp || (resp.code !== 3000 && !resp.data && !resp.result)) {
       throw new Error('Bad addRecord response: ' + JSON.stringify(resp));
     }
-    // Zoho returns the new record under resp.data or resp.result.data depending on SDK version
     const newRecord = resp.data || resp.result?.data || resp.result;
     if (!newRecord || !newRecord.ID) {
       throw new Error('addRecord response missing record ID: ' + JSON.stringify(resp));
     }
     const newRow = mapRecord(newRecord, nextLineItem - 1);
-    bomData.push(newRow);
+    bomData.unshift(newRow);  // top of bomData
     if (table) {
-      table.addRow(newRow, false); // false = add to bottom
-      table.scrollToRow(newRow.id, 'bottom', false);
+      table.addRow(newRow, true);  // true = add to TOP
+      table.scrollToRow(newRow.id, 'top', false);
     }
+    lastAddedRowId = newRow.id;
     recentlyEdited.add(newRow.id);
     updateStats();
     updateSaveButtonState();
-    showToast(`Added row ${nextLineItem} — fill in Tag / Form / Mat Type / etc.`, 'success');
+    const carriedNote = lastAddedRowId && bomData.find(r => r.id === lastAddedRowId && (r.formType || r.material))
+      ? ' (carried Form/Mat/Spec/Material from previous add — fill in Tag + dimensions)'
+      : ' — fill in Tag / Form / Mat Type / etc.';
+    showToast(`Added row ${nextLineItem}${carriedNote}`, 'success');
   } catch (err) {
     showToast('Add row failed: ' + (err.message || JSON.stringify(err)), 'error');
     console.error('[BOM Editor] addRecord failed', err);
