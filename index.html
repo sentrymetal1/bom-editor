@@ -89,13 +89,56 @@
   .bulk-select:hover { background: #eef2f7; }
   .row-action-btn.delete-perm {
     background: #c62828;
-    border-color: #b71c1c;
+    border: 1px solid #b71c1c;
     color: #fff;
-    margin-left: 4px;
-    padding: 2px 6px;
-    font-size: 11px;
+    margin-left: 3px;
+    padding: 1px 5px;
+    font-size: 12px;
+    line-height: 1;
   }
   .row-action-btn.delete-perm:hover { background: #b71c1c; }
+
+  /* Custom confirm modal — replaces native confirm() so the dialog doesn't carry
+     the "An embedded page at sentrymetal1.github.io says" browser branding. */
+  .confirm-modal {
+    position: fixed; inset: 0;
+    display: none;
+    align-items: center; justify-content: center;
+    z-index: 10000;
+  }
+  .confirm-modal.show { display: flex; }
+  .confirm-modal-backdrop {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.45);
+  }
+  .confirm-modal-box {
+    position: relative;
+    background: #fff;
+    border-radius: 6px;
+    padding: 20px 24px;
+    min-width: 340px;
+    max-width: 480px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    font-family: 'DM Sans', sans-serif;
+  }
+  .confirm-modal-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1a3a5f;
+    margin-bottom: 8px;
+    letter-spacing: 0.02em;
+  }
+  .confirm-modal-msg {
+    font-size: 13px;
+    color: #333;
+    line-height: 1.5;
+    margin-bottom: 18px;
+  }
+  .confirm-modal-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
   .btn {
     border: 1px solid transparent;
     border-radius: 4px;
@@ -420,10 +463,22 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.15</span> — Permanent Delete button + single-click SA/Galv toggle + bulk-apply panel (SA/Galv/Supplied/Finish across visible rows) + visual toolbar separation.
+  <span id="build-tag-display">v2.16</span> — Custom confirm modal (no browser branding) + Delete column narrower with icon buttons + blank QTY/FT/INCH cells show 0 instead of empty.
 </div>
 
 <div id="toast" class="toast"></div>
+
+<div id="confirm-modal" class="confirm-modal" aria-hidden="true">
+  <div class="confirm-modal-backdrop"></div>
+  <div class="confirm-modal-box" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div id="confirm-title" class="confirm-modal-title">BOM Editor</div>
+    <div id="confirm-msg"   class="confirm-modal-msg"></div>
+    <div class="confirm-modal-actions">
+      <button type="button" id="confirm-cancel" class="btn btn-ghost">Cancel</button>
+      <button type="button" id="confirm-ok"     class="btn btn-primary">OK</button>
+    </div>
+  </div>
+</div>
 
 <div id="grid-lock" class="grid-lock">
   <div class="big-spinner"></div>
@@ -431,7 +486,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.15 (2026-05-23)";
+const BUILD_TAG = "v2.16 (2026-05-23)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -601,6 +656,43 @@ function flashRow(row, kind) {
 
 const nonNegNumber = v => Number.isFinite(Number(v)) && Number(v) >= 0;
 const boolToApi    = v => String(Boolean(v));
+
+// Custom confirm modal — returns Promise<boolean>. Replaces native confirm()
+// so dialogs don't carry "An embedded page at sentrymetal1.github.io says" branding.
+function customConfirm(message, opts) {
+  opts = opts || {};
+  return new Promise(resolve => {
+    const modal     = document.getElementById('confirm-modal');
+    const titleEl   = document.getElementById('confirm-title');
+    const msgEl     = document.getElementById('confirm-msg');
+    const okBtn     = document.getElementById('confirm-ok');
+    const cancelBtn = document.getElementById('confirm-cancel');
+    titleEl.textContent = opts.title  || 'BOM Editor';
+    msgEl.textContent   = message;
+    okBtn.textContent     = opts.okText     || 'OK';
+    cancelBtn.textContent = opts.cancelText || 'Cancel';
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    function cleanup(result) {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      document.removeEventListener('keydown', onKey);
+      resolve(result);
+    }
+    function onOk()     { cleanup(true);  }
+    function onCancel() { cleanup(false); }
+    function onKey(e)   {
+      if (e.key === 'Enter')   onOk();
+      if (e.key === 'Escape')  onCancel();
+    }
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    document.addEventListener('keydown', onKey);
+    setTimeout(() => okBtn.focus(), 0);
+  });
+}
 
 // Custom Tabulator editor that auto-toggles a boolean cell value on a SINGLE click.
 // Replaces editor: 'tickCross' which requires two clicks (open editor, then toggle).
@@ -1449,28 +1541,42 @@ function renderGrid() {
         cellEdited: makeCascadeEditHandler('Material', 'material', [], {label: 'Material'}),
         cssClass: 'editable-cell'},
       {title: 'QTY',      field: 'qty',       width: 75,  hozAlign: 'right',
+        formatter: (c) => c.getValue() != null && c.getValue() !== '' ? c.getValue() : '0',
         editor: 'number', editorParams: {min: 0, step: 1},
         cellEdited: makeEditHandler('Quantity', 'qty', {label: 'QTY', validate: nonNegNumber, skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'FT (L)',   field: 'ftL',       width: 80,  hozAlign: 'right',
+        formatter: (c) => c.getValue() != null && c.getValue() !== '' ? c.getValue() : '0',
         editor: 'number', editorParams: {min: 0, step: 1},
         cellEdited: makeEditHandler('Length_FT', 'ftL', {label: 'FT (L)', validate: nonNegNumber, skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'INCH (L)', field: 'inchL',     width: 100,
-        formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
+        formatter: (cell) => {
+          const v = cell.getValue();
+          if (!v) return '0';
+          return lookupCache[LOOKUP_INCH].byId[v] || '0';
+        },
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_INCH].optionsList},
         cellEdited: makeEditHandler('Length_INCH', 'inchL', {label: 'INCH (L)', skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'FT (W)',   field: 'ftW',       width: 80,
-        formatter: (cell) => lookupCache[LOOKUP_PLATE_FT_W].byId[cell.getValue()] || '',
+        formatter: (cell) => {
+          const v = cell.getValue();
+          if (!v) return '0';
+          return lookupCache[LOOKUP_PLATE_FT_W].byId[v] || '0';
+        },
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_PLATE_FT_W].optionsList},
         editable: (cell) => isPanelRow(cell.getRow().getData()),
         cellEdited: makeEditHandler('Width_FT', 'ftW', {label: 'FT (W)', skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'INCH (W)', field: 'inchW',     width: 100,
-        formatter: (cell) => lookupCache[LOOKUP_INCH].byId[cell.getValue()] || '',
+        formatter: (cell) => {
+          const v = cell.getValue();
+          if (!v) return '0';
+          return lookupCache[LOOKUP_INCH].byId[v] || '0';
+        },
         editor: 'list',
         editorParams: {values: lookupCache[LOOKUP_INCH].optionsList},
         editable: (cell) => isPanelRow(cell.getRow().getData()),
@@ -1510,12 +1616,12 @@ function renderGrid() {
         cellEdited: makeEditHandler('Finish', 'finish', {label: 'Finish'}),
         cssClass: 'editable-cell'},
       {title: 'Allocated',field: 'allocatedAmt', width: 105, hozAlign: 'right', formatter: (c) => `$${(c.getValue()||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`},
-      {title: '', field: 'deleted', width: 110, hozAlign: 'center', headerSort: false, frozen: true,
+      {title: '', field: 'deleted', width: 70, hozAlign: 'center', headerSort: false, frozen: true,
         formatter: (cell) => {
           const d = cell.getData();
           return d.deleted
-            ? '<button class="row-action-btn restore" data-action="restore">Restore</button><button class="row-action-btn delete-perm" data-action="hard-delete" title="Permanently delete — cannot be undone">×</button>'
-            : '<button class="row-action-btn delete"  data-action="delete">Delete</button>';
+            ? '<button class="row-action-btn restore" data-action="restore" title="Restore row">↺</button><button class="row-action-btn delete-perm" data-action="hard-delete" title="Permanently delete — cannot be undone">✕</button>'
+            : '<button class="row-action-btn delete"  data-action="delete" title="Mark row for delete (soft)">Del</button>';
         },
         cellClick: (e, cell) => {
           const btn = e.target.closest('button[data-action]');
@@ -1629,7 +1735,7 @@ let lastAddedRowId = null;
 async function hardDeleteRow(row) {
   const data = row.getData();
   const label = data.tag ? `${data.tag} (line ${data.lineItem})` : `row ${data.lineItem}`;
-  if (!confirm(`Permanently delete ${label}? This cannot be undone.`)) return;
+  if (!(await customConfirm(`Permanently delete ${label}? This cannot be undone.`, {title: 'Permanently delete row', okText: 'Delete'}))) return;
   try {
     const resp = await ZOHO.CREATOR.API.deleteRecord({
       appName:    APP_NAME,
@@ -1661,7 +1767,7 @@ async function bulkApplyField(fieldLinkName, dataKey, newValue, displayLabel, to
     showToast('No visible rows to update.', 'error');
     return;
   }
-  if (!confirm(`Set ${displayLabel} to "${newValue}" for ${visibleRows.length} visible row(s)? This saves immediately to Zoho.`)) return;
+  if (!(await customConfirm(`Set ${displayLabel} to "${newValue}" for ${visibleRows.length} visible row(s)? Changes save immediately.`, {title: 'Bulk apply', okText: 'Apply'}))) return;
 
   const apiValue = toApi ? toApi(newValue) : newValue;
   showToast(`Updating ${visibleRows.length} row(s)…`, 'success');
