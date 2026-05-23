@@ -45,12 +45,57 @@
   .toolbar {
     background: #fff;
     padding: 10px 24px;
-    border-bottom: 1px solid #e0e0e0;
+    border-bottom: 2px solid #c0c0c0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
     display: flex;
     gap: 8px;
     align-items: center;
     flex-wrap: wrap;
   }
+  .bulk-toolbar {
+    background: #f7f9fc;
+    padding: 8px 24px;
+    border-bottom: 1px solid #e0e0e0;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 11px;
+  }
+  .bulk-label { color: #666; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+  .bulk-group { display: inline-flex; gap: 4px; align-items: center; }
+  .bulk-field { color: #444; font-weight: 600; margin-right: 2px; }
+  .btn-bulk {
+    border: 1px solid #c8d0db;
+    background: #fff;
+    color: #333;
+    border-radius: 3px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .btn-bulk:hover { background: #eef2f7; border-color: #93a3b8; }
+  .bulk-select {
+    border: 1px solid #c8d0db;
+    background: #fff;
+    color: #333;
+    border-radius: 3px;
+    padding: 4px 6px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .bulk-select:hover { background: #eef2f7; }
+  .row-action-btn.delete-perm {
+    background: #c62828;
+    border-color: #b71c1c;
+    color: #fff;
+    margin-left: 4px;
+    padding: 2px 6px;
+    font-size: 11px;
+  }
+  .row-action-btn.delete-perm:hover { background: #b71c1c; }
   .btn {
     border: 1px solid transparent;
     border-radius: 4px;
@@ -332,6 +377,41 @@
   <button class="btn btn-primary" id="save-project" disabled title="Commit pending changes and recalculate project totals">Save to Project</button>
 </div>
 
+<div class="bulk-toolbar">
+  <span class="bulk-label">Bulk apply to filtered rows:</span>
+  <span class="bulk-group">
+    <span class="bulk-field">SA:</span>
+    <button class="btn-bulk" data-bulk-field="sa" data-bulk-value="true"  title="Check SA for all currently visible rows">✓ All</button>
+    <button class="btn-bulk" data-bulk-field="sa" data-bulk-value="false" title="Uncheck SA for all currently visible rows">✗ None</button>
+  </span>
+  <span class="bulk-group">
+    <span class="bulk-field">Galv:</span>
+    <button class="btn-bulk" data-bulk-field="galv" data-bulk-value="true"  title="Check Galv for all currently visible rows">✓ All</button>
+    <button class="btn-bulk" data-bulk-field="galv" data-bulk-value="false" title="Uncheck Galv for all currently visible rows">✗ None</button>
+  </span>
+  <span class="bulk-group">
+    <span class="bulk-field">Supplied:</span>
+    <select class="bulk-select" data-bulk-field="supplied" title="Set Supplied for all currently visible rows">
+      <option value="">— set to —</option>
+      <option value="Manufacture">Manufacture</option>
+      <option value="Client">Client</option>
+    </select>
+  </span>
+  <span class="bulk-group">
+    <span class="bulk-field">Finish:</span>
+    <select class="bulk-select" data-bulk-field="finish" title="Set Finish for all currently visible rows">
+      <option value="">— set to —</option>
+      <option value="Anodize">Anodize</option>
+      <option value="Blast Only">Blast Only</option>
+      <option value="Blast &amp; Paint">Blast &amp; Paint</option>
+      <option value="Galvanize">Galvanize</option>
+      <option value="Paint Only">Paint Only</option>
+      <option value="Plain">Plain</option>
+      <option value="Powder Coat">Powder Coat</option>
+    </select>
+  </span>
+</div>
+
 <div id="loading" class="state-msg"><span class="spinner"></span>Loading BOM rows...</div>
 <div id="error" class="state-msg error" style="display:none;"></div>
 <div id="quota-banner" style="display:none; background:#fdecea; border-top:1px solid #f5c2c0; border-bottom:1px solid #f5c2c0; color:#7a1f1a; padding:8px 16px; font-size:13px;">
@@ -340,7 +420,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.14</span> — Add Row inserts at TOP + carries forward classification fields from last add. View dropdown: Flat / Group by Tag / Group by Form / Group by Component.
+  <span id="build-tag-display">v2.15</span> — Permanent Delete button + single-click SA/Galv toggle + bulk-apply panel (SA/Galv/Supplied/Finish across visible rows) + visual toolbar separation.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -351,7 +431,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.14 (2026-05-23)";
+const BUILD_TAG = "v2.15 (2026-05-23)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -521,6 +601,19 @@ function flashRow(row, kind) {
 
 const nonNegNumber = v => Number.isFinite(Number(v)) && Number(v) >= 0;
 const boolToApi    = v => String(Boolean(v));
+
+// Custom Tabulator editor that auto-toggles a boolean cell value on a SINGLE click.
+// Replaces editor: 'tickCross' which requires two clicks (open editor, then toggle).
+// Pattern: Tabulator calls the editor function on click, we immediately call success()
+// with the inverted value. cellEdited fires; save handler runs. Returns an empty
+// placeholder element (Tabulator requires a DOM node return value, even if unused).
+function autoToggleEditor(cell, onRendered, success /*, cancel, editorParams */) {
+  const newValue = !cell.getValue();
+  setTimeout(() => success(newValue), 0);  // defer so cell finishes entering edit mode first
+  const placeholder = document.createElement('span');
+  placeholder.style.display = 'none';
+  return placeholder;
+}
 
 async function refetchAndUpdateRow(row, recordId) {
   const resp = await ZOHO.CREATOR.API.getRecordById({
@@ -1387,11 +1480,11 @@ function renderGrid() {
       {title: 'Tot WT',   field: 'totWt',     width: 110, hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Area',     field: 'area',      width: 90,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'SA',       field: 'sa',        width: 45,  hozAlign: 'center', formatter: 'tickCross',
-        editor: 'tickCross',
+        editor: autoToggleEditor,
         cellEdited: makeEditHandler('Plate_SA', 'sa', {label: 'SA', toApi: boolToApi, skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'Galv',     field: 'galv',      width: 65,  hozAlign: 'center', formatter: 'tickCross',
-        editor: 'tickCross',
+        editor: autoToggleEditor,
         cellEdited: makeEditHandler('Galv', 'galv', {label: 'Galv', toApi: boolToApi, skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'Galv LB',  field: 'galvLb',    width: 95,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
@@ -1417,19 +1510,21 @@ function renderGrid() {
         cellEdited: makeEditHandler('Finish', 'finish', {label: 'Finish'}),
         cssClass: 'editable-cell'},
       {title: 'Allocated',field: 'allocatedAmt', width: 105, hozAlign: 'right', formatter: (c) => `$${(c.getValue()||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`},
-      {title: '', field: 'deleted', width: 55, hozAlign: 'center', headerSort: false, frozen: true,
+      {title: '', field: 'deleted', width: 110, hozAlign: 'center', headerSort: false, frozen: true,
         formatter: (cell) => {
           const d = cell.getData();
           return d.deleted
-            ? '<button class="row-action-btn restore" data-action="restore">Restore</button>'
+            ? '<button class="row-action-btn restore" data-action="restore">Restore</button><button class="row-action-btn delete-perm" data-action="hard-delete" title="Permanently delete — cannot be undone">×</button>'
             : '<button class="row-action-btn delete"  data-action="delete">Delete</button>';
         },
         cellClick: (e, cell) => {
           const btn = e.target.closest('button[data-action]');
           if (!btn) return;
           e.stopPropagation();
-          const makeDeleted = btn.dataset.action === 'delete';
-          toggleDelete(cell.getRow(), makeDeleted);
+          const action = btn.dataset.action;
+          if (action === 'delete')      toggleDelete(cell.getRow(), true);
+          else if (action === 'restore') toggleDelete(cell.getRow(), false);
+          else if (action === 'hard-delete') hardDeleteRow(cell.getRow());
         }},
     ],
     rowFormatter: function(row) {
@@ -1506,10 +1601,119 @@ document.getElementById('back').addEventListener('click', () => {
 
 document.getElementById('add-row').addEventListener('click', addNewBomRow);
 
+// Bulk-apply controls (SA/Galv buttons, Supplied/Finish dropdowns)
+document.querySelectorAll('.btn-bulk').forEach(b => {
+  b.addEventListener('click', () => {
+    const field = b.dataset.bulkField;
+    const value = b.dataset.bulkValue === 'true' ? true : b.dataset.bulkValue === 'false' ? false : b.dataset.bulkValue;
+    if (field === 'sa')   bulkApplyField('Plate_SA', 'sa',   value, 'SA',   boolToApi);
+    if (field === 'galv') bulkApplyField('Galv',     'galv', value, 'Galv', boolToApi);
+  });
+});
+document.querySelectorAll('.bulk-select').forEach(sel => {
+  sel.addEventListener('change', () => {
+    const v = sel.value;
+    if (!v) return;
+    const field = sel.dataset.bulkField;
+    if (field === 'supplied') bulkApplyField('Supplied', 'supplied', v, 'Supplied');
+    if (field === 'finish')   bulkApplyField('Finish',   'finish',   v, 'Finish');
+    sel.value = '';  // reset the dropdown so user can re-trigger if needed
+  });
+});
+
 // Track the most-recently-added row in this session so the next Add can carry
 // forward its classification fields (Form / Mat Type / Spec / Material / Component /
 // Drawing / Supplied / Finish). Dimensions + Tag + QTY stay blank.
 let lastAddedRowId = null;
+
+async function hardDeleteRow(row) {
+  const data = row.getData();
+  const label = data.tag ? `${data.tag} (line ${data.lineItem})` : `row ${data.lineItem}`;
+  if (!confirm(`Permanently delete ${label}? This cannot be undone.`)) return;
+  try {
+    const resp = await ZOHO.CREATOR.API.deleteRecord({
+      appName:    APP_NAME,
+      reportName: REPORT_NAME,
+      id:         data.id,
+    });
+    if (!resp || (resp.code !== 3000 && !resp.result)) {
+      throw new Error('Bad deleteRecord response: ' + JSON.stringify(resp));
+    }
+    const idx = bomData.findIndex(r => r.id === data.id);
+    if (idx >= 0) bomData.splice(idx, 1);
+    recentlyEdited.delete(data.id);
+    row.delete();
+    updateStats();
+    updateSaveButtonState();
+    showToast(`Permanently deleted ${label}.`, 'success');
+  } catch (err) {
+    showToast('Permanent delete failed: ' + (err.message || JSON.stringify(err)), 'error');
+    console.error('[BOM Editor] hard delete failed', err);
+  }
+}
+
+// Bulk-apply a single field's value to all currently-filtered (visible) rows.
+// Uses individual updateRecord calls with concurrency cap (avoid Zoho rate-limit).
+async function bulkApplyField(fieldLinkName, dataKey, newValue, displayLabel, toApi) {
+  if (!table) return;
+  const visibleRows = table.getRows('active');  // 'active' = passes current filter
+  if (visibleRows.length === 0) {
+    showToast('No visible rows to update.', 'error');
+    return;
+  }
+  if (!confirm(`Set ${displayLabel} to "${newValue}" for ${visibleRows.length} visible row(s)? This saves immediately to Zoho.`)) return;
+
+  const apiValue = toApi ? toApi(newValue) : newValue;
+  showToast(`Updating ${visibleRows.length} row(s)…`, 'success');
+
+  const CONCURRENCY = 3;
+  let idx = 0;
+  let ok = 0, failed = 0;
+  async function worker() {
+    while (idx < visibleRows.length) {
+      const row = visibleRows[idx++];
+      const data = row.getData();
+      if (data[dataKey] === newValue) { ok++; continue; }  // already matches, skip the call
+      try {
+        const resp = await ZOHO.CREATOR.API.updateRecord({
+          appName:    APP_NAME,
+          reportName: REPORT_NAME,
+          id:         data.id,
+          data:       { data: { [fieldLinkName]: apiValue } }
+        });
+        if (!resp || (resp.code !== 3000 && !resp.result)) throw new Error('Bad response');
+        // Local-only update — skip refetch
+        row.update({[dataKey]: newValue});
+        const item = bomData.find(r => r.id === data.id);
+        if (item) item[dataKey] = newValue;
+        // For SA/Galv toggles, also recompute the calcs for this row.
+        if (dataKey === 'sa' || dataKey === 'galv') {
+          const calc = computeBomCalcs(row.getData());
+          if (calc) {
+            row.update({unitWt: calc.unitWt, totWt: calc.totWt, area: calc.area, galvLb: calc.galvLb});
+            if (item) {
+              item.unitWt = calc.unitWt; item.totWt = calc.totWt;
+              item.area   = calc.area;   item.galvLb = calc.galvLb;
+            }
+          }
+        }
+        recentlyEdited.add(data.id);
+        ok++;
+      } catch (err) {
+        failed++;
+        console.error('[BOM Editor] bulk update failed for row', data.id, err);
+      }
+    }
+  }
+  await Promise.all(Array.from({length: CONCURRENCY}, () => worker()));
+  updateStats();
+  updateSaveButtonState();
+  if (failed === 0) {
+    showToast(`Bulk update done: ${ok} row(s) updated.`, 'success');
+  } else {
+    showToast(`Bulk update: ${ok} succeeded, ${failed} failed. Check console.`, 'error');
+  }
+}
 
 async function addNewBomRow() {
   const btn = document.getElementById('add-row');
