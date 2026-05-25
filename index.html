@@ -466,7 +466,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.17.4</span> — Changing Form_Type from Panel (Plate/Sheet) to Linear (Flat Bar/Beam/Angle/etc.) now clears Width_FT and Width_INCH automatically, so leftover plate widths don't carry into the new form.
+  <span id="build-tag-display">v2.17.5</span> — Changing Form_Type now also re-syncs Nest_Type (Linear vs Panel) so the nesting app routes the row to the correct 1D/2D algorithm. Width_FT/Width_INCH are still cleared when switching to a Linear form type.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -489,7 +489,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.17.4 (2026-05-25)";
+const BUILD_TAG = "v2.17.5 (2026-05-25)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -962,11 +962,19 @@ function makeCascadeEditHandler(fieldLinkName, dataKey, downstream, opts) {
       }
     }
 
-    // Form_Type → Linear (or cleared) makes width fields meaningless. Clear
-    // them so the row doesn't carry stale plate widths into a flat-bar/beam/etc.
-    if (fieldLinkName === 'Form_Type' && !isPanelRow({formType: rawNew})) {
-      if (data.ftW)   { payload.Width_FT   = ''; clearedDataKeys.push('ftW'); }
-      if (data.inchW) { payload.Width_INCH = ''; clearedDataKeys.push('inchW'); }
+    // Form_Type changed → sync Nest_Type to the new form's measurement so the
+    // nesting app routes the row to the correct 1D/2D algorithm (it reads
+    // Nest_Type directly, not the Form_Type's measurement). Also clear width
+    // fields when going to Linear so leftover plate widths don't carry through.
+    if (fieldLinkName === 'Form_Type') {
+      const newMeasurement = lookupCache[LOOKUP_FORM_TYPE].measurementById?.[rawNew] || '';
+      if (newMeasurement === 'Linear' || newMeasurement === 'Panel') {
+        payload.Nest_Type = newMeasurement;
+      }
+      if (newMeasurement !== 'Panel') {
+        if (data.ftW)   { payload.Width_FT   = ''; clearedDataKeys.push('ftW'); }
+        if (data.inchW) { payload.Width_INCH = ''; clearedDataKeys.push('inchW'); }
+      }
     }
 
     // Path B: when this cascade affects derived values (Material change, or
