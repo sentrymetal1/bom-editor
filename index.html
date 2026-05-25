@@ -466,7 +466,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.17.5</span> — Changing Form_Type now also re-syncs Nest_Type (Linear vs Panel) so the nesting app routes the row to the correct 1D/2D algorithm. Width_FT/Width_INCH are still cleared when switching to a Linear form type.
+  <span id="build-tag-display">v2.17.6</span> — Add-row carry-forward now also stamps Nest_Type from the carried Form_Type so new rows are nest-eligible immediately. Plus v2.17.5 sync on Form_Type edits.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -489,7 +489,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.17.5 (2026-05-25)";
+const BUILD_TAG = "v2.17.6 (2026-05-25)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1984,6 +1984,16 @@ async function addNewBomRow() {
         if (prev.drawing)   payload.Scope_LU      = prev.drawing;
         if (prev.supplied)  payload.Supplied      = prev.supplied;
         if (prev.finish)    payload.Finish        = prev.finish;
+        // Derive Nest_Type from the carried Form_Type so the new row is
+        // nest-eligible without needing a second Form_Type edit to fire the
+        // cascade. Without this, carry-forward rows land with empty Nest_Type
+        // and get silently skipped by the nesting widget.
+        if (prev.formType) {
+          const measurement = lookupCache[LOOKUP_FORM_TYPE].measurementById?.[prev.formType] || '';
+          if (measurement === 'Linear' || measurement === 'Panel') {
+            payload.Nest_Type = measurement;
+          }
+        }
       }
     }
     const resp = await ZOHO.CREATOR.API.addRecord({
