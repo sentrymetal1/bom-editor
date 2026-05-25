@@ -466,7 +466,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.17.0</span> — Calc fields (Unit_Weight, CalcWeight, Area, Galv_LB) sent in same payload as dimensional edits; Galv_LB rounded to 0 decimals to match Zoho field config.
+  <span id="build-tag-display">v2.17.1</span> — Save to Project force-commits any open cell editor first, so edits made just before clicking the button aren't dropped.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -489,7 +489,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.17.0 (2026-05-24)";
+const BUILD_TAG = "v2.17.1 (2026-05-25)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -738,13 +738,36 @@ function updateSaveButtonState() {
   btn.textContent = n === 0 ? 'Save to Project' : `Save to Project (${n})`;
 }
 
-async function commitChanges() {
-  if (recentlyEdited.size === 0) return;
+// Force-commit any open Tabulator cell editor and wait for in-flight cell
+// saves to finish. Tabulator only fires cellEdited on Enter/Tab/blur — clicking
+// a toolbar button can land before the blur, dropping the edit silently.
+async function awaitPendingCellEdits(maxWaitMs = 8000) {
+  const active = document.activeElement;
+  if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) {
+    active.blur();
+    await new Promise(r => setTimeout(r, 50)); // give cellEdited a tick to queue
+  }
+  const start = Date.now();
+  while (pendingCells.size > 0 && Date.now() - start < maxWaitMs) {
+    await new Promise(r => setTimeout(r, 100));
+  }
+}
 
+async function commitChanges() {
   const btn  = document.getElementById('save-project');
   const lock = document.getElementById('grid-lock');
   btn.disabled = true;
   lock.classList.add('show');
+
+  // Commit any cell still being edited (e.g. user typed in FT and clicked
+  // Save without pressing Tab/Enter) before we kick the project-level recalc.
+  await awaitPendingCellEdits();
+
+  if (recentlyEdited.size === 0) {
+    lock.classList.remove('show');
+    updateSaveButtonState();
+    return;
+  }
 
   // Snapshot which rows were marked for delete BEFORE the commit,
   // so we can detect ones that survived (allocations block hard-delete)
