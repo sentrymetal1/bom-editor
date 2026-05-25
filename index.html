@@ -466,7 +466,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.17.2</span> — Path B extended to cascade fields (Form/Mat Type/Spec/Material): edits now send rounded calc fields too, so Material changes can't trip the Galv_LB 0-decimal validation.
+  <span id="build-tag-display">v2.17.3</span> — Length_Nest / Width_Nest also written from the widget on every dimensional/cascade edit, so the nesting program sees fresh lengths immediately (no longer relies on Zoho workflow recompute).
 </div>
 
 <div id="toast" class="toast"></div>
@@ -489,7 +489,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.17.2 (2026-05-25)";
+const BUILD_TAG = "v2.17.3 (2026-05-25)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -872,9 +872,14 @@ function makeEditHandler(fieldLinkName, dataKey, opts) {
 
     // Path B: when this edit affects derived values, send rounded calcs in the
     // same payload so the widget owns the math. Stops Zoho workflows from
-    // writing decimal Galv_LB into a 0-decimal field (which fails save).
+    // writing decimal Galv_LB into a 0-decimal field (which fails save),
+    // and keeps Length_Nest/Width_Nest (read by the nesting app) in sync.
     let calc = null;
     if (opts.recomputeCalcs) {
+      const nest = computeNestDims(row.getData());
+      payload.Length_Nest = nest.lengthNest;
+      payload.Width_Nest  = nest.widthNest;
+
       calc = computeBomCalcs(row.getData());
       if (calc) {
         payload.Unit_Weight = calc.unitWt;
@@ -959,11 +964,18 @@ function makeCascadeEditHandler(fieldLinkName, dataKey, downstream, opts) {
 
     // Path B: when this cascade affects derived values (Material change, or
     // any change that clears Material downstream), send rounded calcs in the
-    // same payload so the Zoho workflow doesn't write decimal Galv_LB.
+    // same payload so the Zoho workflow doesn't write decimal Galv_LB, and
+    // keep Length_Nest/Width_Nest (read by the nesting app) in sync.
     let calc = null;
     if (opts.recomputeCalcs) {
       const provisional = { ...data };
       for (const k of clearedDataKeys) provisional[k] = '';
+
+      // Nest dims don't depend on Material, always safe to compute.
+      const nest = computeNestDims(provisional);
+      payload.Length_Nest = nest.lengthNest;
+      payload.Width_Nest  = nest.widthNest;
+
       calc = computeBomCalcs(provisional);
       if (calc) {
         payload.Unit_Weight = calc.unitWt;
@@ -1175,6 +1187,32 @@ function plateFtWidthById(ftwId) {
   const rec = lookupCache[LOOKUP_PLATE_FT_W]?.recordsById?.[ftwId];
   if (!rec) return 0;
   return Number(rec.Width) || 0;
+}
+
+// Length_Nest / Width_Nest are the total-inch snapshot fields the nesting
+// program reads (material-compass-nesting-app/server/index.js:82). They do
+// not depend on Material, so this is computed separately from computeBomCalcs
+// and is safe to call even when Material is unset.
+//   Length_Nest = Length_FT * 12 + Length_INCH.Result
+//   Width_Nest  = Panel ? Width_FT.Width * 12 + Width_INCH.Result : 0
+// Rounded to integers — the Zoho field displays as integer in all observed
+// data; tighten to 2-decimals if a fractional-inch row gets rejected.
+function computeNestDims(row) {
+  const lengthFt    = Number(row.ftL) || 0;
+  const lengthInRes = inchResultById(row.inchL);
+  const lengthNest  = lengthFt * 12 + lengthInRes;
+
+  let widthNest = 0;
+  if (isPanelRow(row)) {
+    const widthFt    = plateFtWidthById(row.ftW);
+    const widthInRes = inchResultById(row.inchW);
+    widthNest        = widthFt * 12 + widthInRes;
+  }
+
+  return {
+    lengthNest: Math.round(lengthNest),
+    widthNest:  Math.round(widthNest),
+  };
 }
 
 // Client-side calc for Unit_Weight / CalcWeight (Tot WT) / Area / Galv_LB.
