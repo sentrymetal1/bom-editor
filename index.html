@@ -466,7 +466,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.17.1</span> — Save to Project force-commits any open cell editor first, so edits made just before clicking the button aren't dropped.
+  <span id="build-tag-display">v2.17.2</span> — Path B extended to cascade fields (Form/Mat Type/Spec/Material): edits now send rounded calc fields too, so Material changes can't trip the Galv_LB 0-decimal validation.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -489,7 +489,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.17.1 (2026-05-25)";
+const BUILD_TAG = "v2.17.2 (2026-05-25)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -957,6 +957,29 @@ function makeCascadeEditHandler(fieldLinkName, dataKey, downstream, opts) {
       }
     }
 
+    // Path B: when this cascade affects derived values (Material change, or
+    // any change that clears Material downstream), send rounded calcs in the
+    // same payload so the Zoho workflow doesn't write decimal Galv_LB.
+    let calc = null;
+    if (opts.recomputeCalcs) {
+      const provisional = { ...data };
+      for (const k of clearedDataKeys) provisional[k] = '';
+      calc = computeBomCalcs(provisional);
+      if (calc) {
+        payload.Unit_Weight = calc.unitWt;
+        payload.CalcWeight  = calc.totWt;
+        payload.Area        = calc.area;
+        payload.Galv_LB     = calc.galvLb;
+      } else {
+        // Material cleared (or never set) — zero out calcs so stale values
+        // don't linger and so workflow has nothing fractional to re-compute.
+        payload.Unit_Weight = 0;
+        payload.CalcWeight  = 0;
+        payload.Area        = 0;
+        payload.Galv_LB     = 0;
+      }
+    }
+
     pendingCells.add(key);
     try {
       const resp = await ZOHO.CREATOR.API.updateRecord({
@@ -980,6 +1003,19 @@ function makeCascadeEditHandler(fieldLinkName, dataKey, downstream, opts) {
         }
         const localPatch = {[dataKey]: rawNew};
         for (const k of clearedDataKeys) localPatch[k] = '';
+        if (opts.recomputeCalcs) {
+          const calcVals = calc || {unitWt: 0, totWt: 0, area: 0, galvLb: 0};
+          localPatch.unitWt = calcVals.unitWt;
+          localPatch.totWt  = calcVals.totWt;
+          localPatch.area   = calcVals.area;
+          localPatch.galvLb = calcVals.galvLb;
+          if (item) {
+            item.unitWt = calcVals.unitWt;
+            item.totWt  = calcVals.totWt;
+            item.area   = calcVals.area;
+            item.galvLb = calcVals.galvLb;
+          }
+        }
         row.update(localPatch);
         updateStats();
       }
@@ -1514,7 +1550,7 @@ function renderGrid() {
           {dataKey: 'matType',  fieldLinkName: 'Material_Type'},
           {dataKey: 'spec',     fieldLinkName: 'Specification'},
           {dataKey: 'material', fieldLinkName: 'Material'},
-        ], {label: 'Form'}),
+        ], {label: 'Form', recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'Mat Type', field: 'matType',   width: 140,
         formatter: (c) => {
@@ -1526,7 +1562,7 @@ function renderGrid() {
         cellEdited: makeCascadeEditHandler('Material_Type', 'matType', [
           {dataKey: 'spec',     fieldLinkName: 'Specification'},
           {dataKey: 'material', fieldLinkName: 'Material'},
-        ], {label: 'Mat Type'}),
+        ], {label: 'Mat Type', recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'Spec',     field: 'spec',      width: 115,
         formatter: (c) => {
@@ -1546,7 +1582,7 @@ function renderGrid() {
         },
         cellEdited: makeCascadeEditHandler('Specification', 'spec', [
           {dataKey: 'material', fieldLinkName: 'Material'},
-        ], {label: 'Spec'}),
+        ], {label: 'Spec', recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'Material', field: 'material',  width: 210,
         formatter: (c) => {
@@ -1577,7 +1613,7 @@ function renderGrid() {
           }
           return {values: deduped, autocomplete: true, listOnEmpty: true};
         },
-        cellEdited: makeCascadeEditHandler('Material', 'material', [], {label: 'Material'}),
+        cellEdited: makeCascadeEditHandler('Material', 'material', [], {label: 'Material', recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'QTY',      field: 'qty',       width: 75,  hozAlign: 'right',
         formatter: (c) => c.getValue() != null && c.getValue() !== '' ? c.getValue() : '0',
