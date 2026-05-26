@@ -466,7 +466,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.17.7</span> — Add-row now sets Project_Bi_Directional_Lookup so new rows appear in the project form's native BOM subform (not just reports). Plus v2.17.6 Nest_Type carry-forward and v2.17.5 Form_Type cascade sync.
+  <span id="build-tag-display">v2.17.8</span> — Corrected v2.17.7's bi-directional field link name to Bi_Directional_Project_ID (the actual link name on the BOM form). v2.17.7 used the wrong name and was silently ignored by Zoho.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -489,7 +489,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.17.7 (2026-05-26)";
+const BUILD_TAG = "v2.17.8 (2026-05-26)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1971,9 +1971,11 @@ async function addNewBomRow() {
     const payload = {
       MCP_Customer_Project_Form: projectId,
       // Bi-directional lookup must be set explicitly for API-inserted rows
-      // to appear in the parent project form's native subform. Without it,
-      // rows show in reports but the project page's BOM subform stays empty.
-      Project_Bi_Directional_Lookup: projectId,
+      // to appear in the parent project form's native subform. Field link
+      // name on this form is Bi_Directional_Project_ID (matches CSV import
+      // at BOM_Import_From_Staging.txt:293). NOT the same name as the
+      // bi-directional field on Project_Material_Allocated_Detail_Form.
+      Bi_Directional_Project_ID: projectId,
       Line_Item: nextLineItem,
     };
     // Carry-forward from last-added row's CURRENT state — saves re-picking material every add.
