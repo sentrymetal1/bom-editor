@@ -134,6 +134,7 @@
     color: #333;
     line-height: 1.5;
     margin-bottom: 18px;
+    white-space: pre-line;  /* honor \n in multi-line alert messages */
   }
   .confirm-modal-actions {
     display: flex;
@@ -466,7 +467,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.17.8</span> — Corrected v2.17.7's bi-directional field link name to Bi_Directional_Project_ID (the actual link name on the BOM form). v2.17.7 used the wrong name and was silently ignored by Zoho.
+  <span id="build-tag-display">v2.18.0</span> — Save-to-Project result now shows a dismissible dialog with an OK button (instead of a 3-second toast) so the "N rows kept" message is readable. Save failures show a dialog too.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -489,7 +490,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.17.8 (2026-05-26)";
+const BUILD_TAG = "v2.18.0 (2026-05-28)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -647,7 +648,7 @@ function showToast(msg, kind) {
   t.textContent = msg;
   t.className = 'toast show ' + (kind || 'success');
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.className = 'toast'; }, 2800);
+  toastTimer = setTimeout(() => { t.className = 'toast'; }, 4000);
 }
 
 function flashRow(row, kind) {
@@ -692,6 +693,39 @@ function customConfirm(message, opts) {
     }
     okBtn.addEventListener('click', onOk);
     cancelBtn.addEventListener('click', onCancel);
+    document.addEventListener('keydown', onKey);
+    setTimeout(() => okBtn.focus(), 0);
+  });
+}
+
+// Single-OK modal — same dialog as customConfirm but no Cancel button. For
+// important results the user must acknowledge (e.g. "N rows kept"), which a
+// 3-second toast is too easy to miss. Stays on screen until OK is clicked.
+function customAlert(message, opts) {
+  opts = opts || {};
+  return new Promise(resolve => {
+    const modal     = document.getElementById('confirm-modal');
+    const titleEl   = document.getElementById('confirm-title');
+    const msgEl     = document.getElementById('confirm-msg');
+    const okBtn     = document.getElementById('confirm-ok');
+    const cancelBtn = document.getElementById('confirm-cancel');
+    titleEl.textContent = opts.title || 'BOM Editor';
+    msgEl.textContent   = message;
+    okBtn.textContent   = opts.okText || 'OK';
+    cancelBtn.style.display = 'none';   // alert mode: hide Cancel
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    function cleanup() {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+      cancelBtn.style.display = '';     // restore for future confirms
+      okBtn.removeEventListener('click', onOk);
+      document.removeEventListener('keydown', onKey);
+      resolve(true);
+    }
+    function onOk()   { cleanup(); }
+    function onKey(e) { if (e.key === 'Enter' || e.key === 'Escape') onOk(); }
+    okBtn.addEventListener('click', onOk);
     document.addEventListener('keydown', onKey);
     setTimeout(() => okBtn.focus(), 0);
   });
@@ -793,20 +827,22 @@ async function commitChanges() {
 
     recentlyEdited.clear();
     updateSaveButtonState();
+    lock.classList.remove('show');  // drop overlay before the dialog so it isn't behind it
 
     if (survived.length > 0) {
-      showToast(
-        `Saved. ${survived.length} row(s) marked for delete stayed because they have allocated material. Clear allocations first to remove them.`,
-        'success'
+      await customAlert(
+        `Saved — totals recalculated.\n\n${survived.length} row(s) marked for delete were NOT removed. Zoho still reports them as tied to purchasing/allocated material, so the delete-protection kept them.\n\nIf the project's Purchase Material tab is empty, that count is stale — turn on "Show deleted" and use the red ✕ to permanently delete those rows.`,
+        {title: 'Save complete — some rows kept', okText: 'Got it'}
       );
     } else {
       showToast('Saved to project. Totals recalculated.', 'success');
     }
   } catch (err) {
     const detail = err?.responseText || err?.message || JSON.stringify(err);
-    showToast('Save to project failed: ' + detail, 'error');
     console.error('[BOM Editor] commitChanges failed', err);
     updateSaveButtonState();
+    lock.classList.remove('show');
+    await customAlert('Save to project failed:\n\n' + detail, {title: 'Save failed', okText: 'OK'});
   } finally {
     lock.classList.remove('show');
   }
