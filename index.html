@@ -299,6 +299,14 @@
     cursor: not-allowed;
   }
   .btn-primary .spinner { border-color: rgba(255,255,255,0.4); border-top-color: #fff; }
+  .btn-danger {
+    background: #fff;
+    color: #bc0f0f;
+    border: 1px solid #e0a0a0;
+  }
+  .btn-danger:hover           { background: #fdeaea; border-color: #bc0f0f; }
+  .btn-danger:disabled        { color: #cdd5df; border-color: #e8e8e8; cursor: not-allowed; background: #fafafa; }
+  .btn-danger .spinner        { border-color: rgba(188,15,15,0.3); border-top-color: #bc0f0f; }
 
   .grid-lock {
     position: fixed;
@@ -420,6 +428,7 @@
     <option value="component">Group by Component</option>
   </select>
   <button class="btn btn-ghost" id="toggle-hide-deleted" title="Hide rows marked for deletion">Hide deleted</button>
+  <button class="btn btn-danger" id="delete-marked" title="Permanently delete every row currently marked for delete — cannot be undone">Delete all marked</button>
   <input type="text" class="filter-input" id="filter-input" placeholder="Filter rows...">
   <button class="btn btn-primary" id="save-project" disabled title="Commit pending changes and recalculate project totals">Save to Project</button>
 </div>
@@ -467,7 +476,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.18.0</span> — Save-to-Project result now shows a dismissible dialog with an OK button (instead of a 3-second toast) so the "N rows kept" message is readable. Save failures show a dialog too.
+  <span id="build-tag-display">v2.19.0</span> — New "Delete all marked" toolbar button permanently deletes every row marked for delete in one action (count confirm + result dialog), bypassing the stale delete-protection. v2.18.0: Save-to-Project result shows a dismissible OK dialog instead of a 3-second toast.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -490,7 +499,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.18.0 (2026-05-28)";
+const BUILD_TAG = "v2.19.0 (2026-05-28)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1858,6 +1867,8 @@ document.getElementById('toggle-hide-deleted').addEventListener('click', (e) => 
   applyAllFilters();
 });
 
+document.getElementById('delete-marked').addEventListener('click', hardDeleteAllMarked);
+
 document.getElementById('save-project').addEventListener('click', commitChanges);
 
 document.getElementById('back').addEventListener('click', () => {
@@ -1919,6 +1930,69 @@ async function hardDeleteRow(row) {
   } catch (err) {
     showToast('Permanent delete failed: ' + (err.message || JSON.stringify(err)), 'error');
     console.error('[BOM Editor] hard delete failed', err);
+  }
+}
+
+// Permanently delete EVERY row currently marked for delete (DELETE_field === true),
+// in one action. Same deleteRecord API as hardDeleteRow (bypasses the stale
+// Number_of_Entries delete-protection), just looped with a concurrency cap.
+// Cannot be undone, so it sits behind a count confirm + a result dialog.
+async function hardDeleteAllMarked() {
+  const btn  = document.getElementById('delete-marked');
+  const lock = document.getElementById('grid-lock');
+  const marked = bomData.filter(r => r.deleted);
+  if (marked.length === 0) {
+    await customAlert('No rows are marked for delete. Mark rows with the ✕ button first (they turn grey), then use this to clear them all.', {title: 'Nothing to delete'});
+    return;
+  }
+  if (!(await customConfirm(
+        `Permanently delete ${marked.length} row(s) marked for delete? This calls Zoho's record-delete directly and CANNOT be undone.`,
+        {title: 'Permanently delete all marked', okText: `Delete ${marked.length}`}))) return;
+
+  btn.disabled = true;
+  lock.classList.add('show');
+
+  const CONCURRENCY = 3;
+  let idx = 0, ok = 0, failed = 0;
+  const failedLabels = [];
+  async function worker() {
+    while (idx < marked.length) {
+      const data  = marked[idx++];
+      const label = data.tag ? `${data.tag} (line ${data.lineItem})` : `row ${data.lineItem}`;
+      try {
+        const resp = await ZOHO.CREATOR.API.deleteRecord({
+          appName:    APP_NAME,
+          reportName: REPORT_NAME,
+          id:         data.id,
+        });
+        if (!resp || (resp.code !== 3000 && !resp.result)) {
+          throw new Error('Bad deleteRecord response: ' + JSON.stringify(resp));
+        }
+        const i = bomData.findIndex(r => r.id === data.id);
+        if (i >= 0) bomData.splice(i, 1);
+        recentlyEdited.delete(data.id);
+        const tableRow = table.getRow(data.id);
+        if (tableRow) tableRow.delete();
+        ok++;
+      } catch (err) {
+        failed++;
+        if (failedLabels.length < 10) failedLabels.push(label);
+        console.error('[BOM Editor] bulk hard delete failed for row', data.id, err);
+      }
+    }
+  }
+  await Promise.all(Array.from({length: CONCURRENCY}, () => worker()));
+
+  updateStats();
+  updateSaveButtonState();
+  lock.classList.remove('show');
+  btn.disabled = false;
+
+  if (failed === 0) {
+    await customAlert(`Permanently deleted ${ok} row(s).`, {title: 'Done'});
+  } else {
+    const tail = failedLabels.length ? `\n\nFailed: ${failedLabels.join(', ')}${failed > failedLabels.length ? ', …' : ''}` : '';
+    await customAlert(`${ok} row(s) deleted, ${failed} failed.\n\nFailed rows are still tied to purchasing/allocated material in Zoho, OR a delete call errored — check the console for details.${tail}`, {title: 'Partly done'});
   }
 }
 
