@@ -436,6 +436,11 @@
 <div class="bulk-toolbar">
   <span class="bulk-label">Bulk apply to filtered rows:</span>
   <span class="bulk-group">
+    <span class="bulk-field">Delete:</span>
+    <button class="btn-bulk" data-bulk-field="delete" data-bulk-value="true"  title="Mark ALL visible rows for delete, then click 'Delete all marked' to remove them">✓ All</button>
+    <button class="btn-bulk" data-bulk-field="delete" data-bulk-value="false" title="Clear the delete mark on all visible rows">✗ None</button>
+  </span>
+  <span class="bulk-group">
     <span class="bulk-field">SA:</span>
     <button class="btn-bulk" data-bulk-field="sa" data-bulk-value="true"  title="Check SA for all currently visible rows">✓ All</button>
     <button class="btn-bulk" data-bulk-field="sa" data-bulk-value="false" title="Uncheck SA for all currently visible rows">✗ None</button>
@@ -476,7 +481,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.20.1</span> — # column renumbers 1..N live: marking a row for delete now drops it from the count (blank #), and kept rows recount immediately — plus after permanent delete, cell edits, add, and load. Display-only. v2.19.2: deleteRecord uses `criteria` not `id`.
+  <span id="build-tag-display">v2.21.0</span> — Allocation column hidden; ✕ action column narrowed (layout fitData, no more stretched empty band); new "Delete: ✓ All / ✗ None" bulk-select marks all visible rows for delete, then "Delete all marked" removes them. v2.20.1: live 1..N renumber.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -499,7 +504,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.20.1 (2026-05-28)";
+const BUILD_TAG = "v2.21.0 (2026-05-28)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1618,7 +1623,7 @@ function renderGrid() {
   table = new Tabulator('#bom-table', {
     data: bomData,
     height: 'calc(100vh - 240px)',
-    layout: 'fitDataStretch',
+    layout: 'fitData',   // size columns to content; do NOT stretch the last (frozen ✕) column to fill the screen
     virtualDom: true,
     rowHeight: 34,
     columns: [
@@ -1807,8 +1812,8 @@ function renderGrid() {
         ]},
         cellEdited: makeEditHandler('Finish', 'finish', {label: 'Finish'}),
         cssClass: 'editable-cell'},
-      {title: 'Allocated',field: 'allocatedAmt', width: 105, hozAlign: 'right', formatter: (c) => `$${(c.getValue()||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`},
-      {title: '', field: 'deleted', width: 50, minWidth: 50, hozAlign: 'center', headerSort: false, frozen: true, resizable: false,
+      {title: 'Allocated',field: 'allocatedAmt', visible: false, width: 105, hozAlign: 'right', formatter: (c) => `$${(c.getValue()||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`},
+      {title: '', field: 'deleted', width: 38, minWidth: 38, hozAlign: 'center', headerSort: false, frozen: true, resizable: false,
         formatter: (cell) => {
           const d = cell.getData();
           return d.deleted
@@ -1906,8 +1911,9 @@ document.querySelectorAll('.btn-bulk').forEach(b => {
   b.addEventListener('click', () => {
     const field = b.dataset.bulkField;
     const value = b.dataset.bulkValue === 'true' ? true : b.dataset.bulkValue === 'false' ? false : b.dataset.bulkValue;
-    if (field === 'sa')   bulkApplyField('Plate_SA', 'sa',   value, 'SA',   boolToApi);
-    if (field === 'galv') bulkApplyField('Galv',     'galv', value, 'Galv', boolToApi);
+    if (field === 'sa')     bulkApplyField('Plate_SA', 'sa',   value, 'SA',   boolToApi);
+    if (field === 'galv')   bulkApplyField('Galv',     'galv', value, 'Galv', boolToApi);
+    if (field === 'delete') markAllFiltered(value);
   });
 });
 document.querySelectorAll('.bulk-select').forEach(sel => {
@@ -1920,6 +1926,31 @@ document.querySelectorAll('.bulk-select').forEach(sel => {
     sel.value = '';  // reset the dropdown so user can re-trigger if needed
   });
 });
+
+// Bulk-mark all currently-filtered rows for delete (or clear marks) — LOCAL only,
+// no API write. A staging selection: rows go grey/reversible, then "Delete all
+// marked" permanently removes them. (The per-row ✕ still writes DELETE_field for
+// a persistent soft-delete; this is just fast all-or-none selection.)
+function markAllFiltered(makeDeleted) {
+  if (!table) return;
+  const rows = table.getRows('active');   // 'active' = passes current filter
+  if (rows.length === 0) { showToast('No visible rows to mark.', 'error'); return; }
+  let changed = 0;
+  rows.forEach(row => {
+    if (row.getData().deleted !== makeDeleted) {
+      const item = bomData.find(r => r.id === row.getData().id);
+      if (item) item.deleted = makeDeleted;
+      row.update({deleted: makeDeleted});
+      row.reformat();
+      changed++;
+    }
+  });
+  renumberRows();
+  updateSaveButtonState();
+  showToast(makeDeleted
+    ? `Marked ${changed} row(s) for delete — click "Delete all marked" to remove them.`
+    : `Cleared delete mark on ${changed} row(s).`, 'success');
+}
 
 // Track the most-recently-added row in this session so the next Add can carry
 // forward its classification fields (Form / Mat Type / Spec / Material / Component /
