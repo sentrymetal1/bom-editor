@@ -476,7 +476,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.19.2</span> — FIX: deleteRecord now passes `criteria` (ID ==) instead of `id` — the widget SDK rejected `id` with "Invalid Configuration", so all permanent deletes failed. Fixes both single-row ✕ and "Delete all marked". v2.19.1: surfaces exact Zoho error.
+  <span id="build-tag-display">v2.20.0</span> — # column now renumbers 1..N after deletes (and on load), closing gaps. Display-only (does not rewrite Line_Item in Zoho). v2.19.2: deleteRecord uses `criteria` not `id` (fixed "Invalid Configuration").
 </div>
 
 <div id="toast" class="toast"></div>
@@ -499,7 +499,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.19.2 (2026-05-28)";
+const BUILD_TAG = "v2.20.0 (2026-05-28)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1574,6 +1574,7 @@ async function loadBOM() {
               : [];
 
     bomData = rows.map(mapRecord).sort((a, b) => a.lineItem - b.lineItem);
+    renumberRows();   // collapse any gaps from previously-deleted rows -> 1..N
 
     document.getElementById('loading').style.display = 'none';
     document.getElementById('bom-table').style.display = 'block';
@@ -1591,6 +1592,20 @@ function updateStats() {
   const totalAlloc = bomData.reduce((s,r) => s + (r.allocatedAmt || 0), 0);
   document.getElementById('stat-weight').textContent  = Math.round(totalWt).toLocaleString() + ' lbs';
   document.getElementById('stat-dollars').textContent = '$' + totalAlloc.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+// Renumber the # column so it always reads 1..N in bomData (display) order,
+// closing gaps left by deleted rows. Display-only: does NOT write Line_Item
+// back to Zoho. Updates both bomData and any live Tabulator rows.
+function renumberRows() {
+  bomData.forEach((item, i) => {
+    const n = i + 1;
+    if (item.lineItem !== n) {
+      item.lineItem = n;
+      const row = table ? table.getRow(item.id) : null;
+      if (row) row.update({lineItem: n});
+    }
+  });
 }
 
 function renderGrid() {
@@ -1926,6 +1941,7 @@ async function hardDeleteRow(row) {
     if (idx >= 0) bomData.splice(idx, 1);
     recentlyEdited.delete(data.id);
     row.delete();
+    renumberRows();
     updateStats();
     updateSaveButtonState();
     showToast(`Permanently deleted ${label}.`, 'success');
@@ -1989,6 +2005,7 @@ async function hardDeleteAllMarked() {
   }
   await Promise.all(Array.from({length: CONCURRENCY}, () => worker()));
 
+  renumberRows();
   updateStats();
   updateSaveButtonState();
   lock.classList.remove('show');
