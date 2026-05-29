@@ -260,6 +260,13 @@
   .tabulator-cell.editable-cell:hover { background: #fff1a8; }
 
   .tabulator-row.row-edited { box-shadow: inset 3px 0 0 0 #5F94CE; }
+
+  /* View-only "verified against drawing" tint. Defined BEFORE row-deleted so a
+     deleted row's grey still wins when a row is both verified and deleted. */
+  .tabulator-row.row-verified { background: #f1f8f1 !important; }
+  .tabulator-row.row-verified:hover { background: #e4f1e4 !important; }
+  .verify-check { width: 15px; height: 15px; cursor: pointer; accent-color: #2f7d3b; vertical-align: middle; margin: 0; }
+
   .tabulator-row.row-deleted .tabulator-cell {
     color: #888 !important;
     text-decoration: line-through;
@@ -481,7 +488,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.21.1</span> — Table fills the width: text columns (Material, Component, Drawing, etc.) grow to fill wide screens; numeric columns + ✕ stay fixed (layout fitColumns + widthGrow). v2.21.0: Allocation hidden, bulk "Delete: ✓ All / ✗ None".
+  <span id="build-tag-display">v2.23.0</span> — Added a view-only ✓ checklist column (first column) to check off rows verified against the drawing; checked rows tint green (not saved to Zoho). v2.22.0: Delete column now has a "DELETE" header above the ✕.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -504,7 +511,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.21.1 (2026-05-28)";
+const BUILD_TAG = "v2.23.0 (2026-05-29)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -520,6 +527,10 @@ let currentView    = 'flat';
 let hideDeleted    = false;
 const recentlyEdited = new Set();
 const pendingCells   = new Set();
+// View-only "verified against drawing" checklist. Keyed by row id, NOT saved to
+// Zoho — purely a review aid. Survives cell edits, reformats, and post-save
+// reloads (ids are stable), but resets when the widget is reopened.
+const verifiedRows   = new Set();
 
 function cellKey(cell) {
   return cell.getRow().getData().id + '|' + cell.getColumn().getField();
@@ -1628,6 +1639,18 @@ function renderGrid() {
     virtualDom: true,
     rowHeight: 34,
     columns: [
+      {title: '✓', field: '_verify', width: 44, minWidth: 44, hozAlign: 'center', headerHozAlign: 'center',
+        headerSort: false, frozen: true, resizable: false,
+        titleFormatter: () => '<span title="Review checklist — check off each row once you\'ve confirmed it against the drawing. View-only, not saved.">✓</span>',
+        formatter: (cell) => {
+          const id = cell.getRow().getData().id;
+          return `<input type="checkbox" class="verify-check" tabindex="-1" ${verifiedRows.has(id) ? 'checked' : ''}>`;
+        },
+        cellClick: (e, cell) => {
+          const id = cell.getRow().getData().id;
+          if (verifiedRows.has(id)) verifiedRows.delete(id); else verifiedRows.add(id);
+          cell.getRow().reformat();   // re-render from the Set (source of truth) + apply row-verified tint
+        }},
       {title: '#',        field: 'lineItem',  width: 50,  hozAlign: 'center', frozen: true},
       {title: 'Tag',      field: 'tag',       width: 110, frozen: true, widthGrow: 1,
         editor: 'input',
@@ -1814,7 +1837,7 @@ function renderGrid() {
         cellEdited: makeEditHandler('Finish', 'finish', {label: 'Finish'}),
         cssClass: 'editable-cell'},
       {title: 'Allocated',field: 'allocatedAmt', visible: false, width: 105, hozAlign: 'right', formatter: (c) => `$${(c.getValue()||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`},
-      {title: '', field: 'deleted', width: 38, minWidth: 38, hozAlign: 'center', headerSort: false, frozen: true, resizable: false,
+      {title: 'DELETE', field: 'deleted', width: 56, minWidth: 56, hozAlign: 'center', headerHozAlign: 'center', headerSort: false, frozen: true, resizable: false,
         formatter: (cell) => {
           const d = cell.getData();
           return d.deleted
@@ -1834,8 +1857,9 @@ function renderGrid() {
     rowFormatter: function(row) {
       const data = row.getData();
       const el   = row.getElement();
-      el.classList.toggle('row-deleted', data.deleted === true);
-      el.classList.toggle('row-edited',  recentlyEdited.has(data.id));
+      el.classList.toggle('row-deleted',  data.deleted === true);
+      el.classList.toggle('row-edited',   recentlyEdited.has(data.id));
+      el.classList.toggle('row-verified', verifiedRows.has(data.id));
     },
   });
 }
