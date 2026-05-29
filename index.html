@@ -476,7 +476,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.19.0</span> — New "Delete all marked" toolbar button permanently deletes every row marked for delete in one action (count confirm + result dialog), bypassing the stale delete-protection. v2.18.0: Save-to-Project result shows a dismissible OK dialog instead of a 3-second toast.
+  <span id="build-tag-display">v2.19.1</span> — "Delete all marked" now surfaces the exact Zoho error when deletes fail (was a generic "check console"). v2.19.0: bulk permanent-delete button. v2.18.0: Save result shows a dismissible OK dialog.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -499,7 +499,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.19.0 (2026-05-28)";
+const BUILD_TAG = "v2.19.1 (2026-05-28)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1954,11 +1954,10 @@ async function hardDeleteAllMarked() {
 
   const CONCURRENCY = 3;
   let idx = 0, ok = 0, failed = 0;
-  const failedLabels = [];
+  let firstErrDetail = '';   // raw Zoho response/error from the first failure, for diagnosis
   async function worker() {
     while (idx < marked.length) {
       const data  = marked[idx++];
-      const label = data.tag ? `${data.tag} (line ${data.lineItem})` : `row ${data.lineItem}`;
       try {
         const resp = await ZOHO.CREATOR.API.deleteRecord({
           appName:    APP_NAME,
@@ -1976,7 +1975,11 @@ async function hardDeleteAllMarked() {
         ok++;
       } catch (err) {
         failed++;
-        if (failedLabels.length < 10) failedLabels.push(label);
+        if (!firstErrDetail) {
+          // Prefer the raw object Zoho rejected with (has .code/.message), fall back to err message.
+          firstErrDetail = (err && err.responseText) || (err && err.message) ||
+                           (typeof err === 'object' ? JSON.stringify(err) : String(err));
+        }
         console.error('[BOM Editor] bulk hard delete failed for row', data.id, err);
       }
     }
@@ -1990,9 +1993,15 @@ async function hardDeleteAllMarked() {
 
   if (failed === 0) {
     await customAlert(`Permanently deleted ${ok} row(s).`, {title: 'Done'});
+  } else if (ok === 0) {
+    // EVERY call failed -> systemic (permission, API method, or a deny workflow), not per-row.
+    await customAlert(
+      `All ${failed} deletes failed — none succeeded.\n\nThis is a single root cause, not row-by-row blocking. Most likely the widget's embed role lacks DELETE permission on the BOM report, or Zoho rejected the delete call.\n\nExact error Zoho returned:\n${firstErrDetail}`,
+      {title: 'Delete failed', okText: 'OK'});
   } else {
-    const tail = failedLabels.length ? `\n\nFailed: ${failedLabels.join(', ')}${failed > failedLabels.length ? ', …' : ''}` : '';
-    await customAlert(`${ok} row(s) deleted, ${failed} failed.\n\nFailed rows are still tied to purchasing/allocated material in Zoho, OR a delete call errored — check the console for details.${tail}`, {title: 'Partly done'});
+    await customAlert(
+      `${ok} row(s) deleted, ${failed} failed.\n\nThe failed rows are likely still tied to purchasing/allocated material in Zoho.\n\nFirst error:\n${firstErrDetail}`,
+      {title: 'Partly done'});
   }
 }
 
