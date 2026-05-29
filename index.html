@@ -476,7 +476,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.20.0</span> — # column now renumbers 1..N after deletes (and on load), closing gaps. Display-only (does not rewrite Line_Item in Zoho). v2.19.2: deleteRecord uses `criteria` not `id` (fixed "Invalid Configuration").
+  <span id="build-tag-display">v2.20.1</span> — # column renumbers 1..N live: marking a row for delete now drops it from the count (blank #), and kept rows recount immediately — plus after permanent delete, cell edits, add, and load. Display-only. v2.19.2: deleteRecord uses `criteria` not `id`.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -499,7 +499,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.20.0 (2026-05-28)";
+const BUILD_TAG = "v2.20.1 (2026-05-28)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -771,6 +771,7 @@ async function refetchAndUpdateRow(row, recordId) {
   const idx      = bomData.findIndex(r => r.id === recordId);
   if (idx >= 0) bomData[idx] = fresh;
   row.update(fresh);
+  renumberRows();   // fresh carries Zoho's gappy Line_Item; re-collapse to 1..N
   updateStats();
 }
 
@@ -883,10 +884,11 @@ async function toggleDelete(row, makeDeleted) {
     }
 
     recentlyEdited.add(data.id);
+    renumberRows();   // marked rows drop out of the count; kept rows go 1..N
     row.reformat();
     updateSaveButtonState();
     flashRow(row, 'success');
-    showToast(`${verb} row ${data.lineItem}.`, 'success');
+    showToast(`${verb}${data.tag ? ' — ' + data.tag : ''}.`, 'success');
   } catch (err) {
     flashRow(row, 'error');
     const detail = err?.responseText || err?.message || JSON.stringify(err);
@@ -1594,16 +1596,18 @@ function updateStats() {
   document.getElementById('stat-dollars').textContent = '$' + totalAlloc.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
 }
 
-// Renumber the # column so it always reads 1..N in bomData (display) order,
-// closing gaps left by deleted rows. Display-only: does NOT write Line_Item
-// back to Zoho. Updates both bomData and any live Tabulator rows.
+// Renumber the # column so kept rows read 1..N in display order. Rows marked
+// for delete (deleted === true) are skipped — they drop out of the count and
+// show a blank #, so the sequence reflects only the rows that will remain.
+// Display-only: does NOT write Line_Item back to Zoho. Updates bomData + live rows.
 function renumberRows() {
-  bomData.forEach((item, i) => {
-    const n = i + 1;
-    if (item.lineItem !== n) {
-      item.lineItem = n;
+  let n = 0;
+  bomData.forEach((item) => {
+    const val = item.deleted ? null : (++n);
+    if (item.lineItem !== val) {
+      item.lineItem = val;
       const row = table ? table.getRow(item.id) : null;
-      if (row) row.update({lineItem: n});
+      if (row) row.update({lineItem: val});
     }
   });
 }
@@ -2161,12 +2165,13 @@ async function addNewBomRow() {
     }
     lastAddedRowId = newRow.id;
     recentlyEdited.add(newRow.id);
+    renumberRows();   // new row is at top -> becomes #1, push the rest down
     updateStats();
     updateSaveButtonState();
     const carriedNote = lastAddedRowId && bomData.find(r => r.id === lastAddedRowId && (r.formType || r.material))
       ? ' (carried Form/Mat/Spec/Material from previous add — fill in Tag + dimensions)'
       : ' — fill in Tag / Form / Mat Type / etc.';
-    showToast(`Added row ${nextLineItem}${carriedNote}`, 'success');
+    showToast(`Added new row at top${carriedNote}`, 'success');
   } catch (err) {
     showToast('Add row failed: ' + (err.message || JSON.stringify(err)), 'error');
     console.error('[BOM Editor] addRecord failed', err);
