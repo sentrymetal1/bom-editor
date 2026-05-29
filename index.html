@@ -945,10 +945,11 @@ function makeEditHandler(fieldLinkName, dataKey, opts) {
 
       calc = computeBomCalcs(row.getData());
       if (calc) {
-        payload.Unit_Weight = calc.unitWt;
-        payload.CalcWeight  = calc.totWt;
-        payload.Area        = calc.area;
-        payload.Galv_LB     = calc.galvLb;
+        payload.Unit_Weight   = calc.unitWt;
+        payload.CalcWeight    = calc.totWt;
+        payload.Area          = calc.area;
+        payload.Galv_LB       = calc.galvLb;
+        payload.Weight_Per_Ft = calc.weightPerFt;
       }
     }
     pendingCells.add(key);
@@ -1056,17 +1057,19 @@ function makeCascadeEditHandler(fieldLinkName, dataKey, downstream, opts) {
 
       calc = computeBomCalcs(provisional);
       if (calc) {
-        payload.Unit_Weight = calc.unitWt;
-        payload.CalcWeight  = calc.totWt;
-        payload.Area        = calc.area;
-        payload.Galv_LB     = calc.galvLb;
+        payload.Unit_Weight   = calc.unitWt;
+        payload.CalcWeight    = calc.totWt;
+        payload.Area          = calc.area;
+        payload.Galv_LB       = calc.galvLb;
+        payload.Weight_Per_Ft = calc.weightPerFt;
       } else {
         // Material cleared (or never set) — zero out calcs so stale values
         // don't linger and so workflow has nothing fractional to re-compute.
-        payload.Unit_Weight = 0;
-        payload.CalcWeight  = 0;
-        payload.Area        = 0;
-        payload.Galv_LB     = 0;
+        payload.Unit_Weight   = 0;
+        payload.CalcWeight    = 0;
+        payload.Area          = 0;
+        payload.Galv_LB       = 0;
+        payload.Weight_Per_Ft = 0;
       }
     }
 
@@ -1351,6 +1354,12 @@ function computeBomCalcs(row) {
     area:   Math.round(area   * 100) / 100,
     // Galv_LB Zoho field is configured for 0 decimal places — must be integer.
     galvLb: Math.round(galvLb),
+    // Per-foot weight from the material catalog. Persisted to the BOM's
+    // Weight_Per_Ft field so the nesting app can read it (it computes stock
+    // weight = Weight_Per_Ft × stock length). The Zoho recalc workflow leaves
+    // this field blank, so the widget must write it — see memory
+    // feedback_bom_weight_per_ft_blank.
+    weightPerFt: Math.round(wpf * 10000) / 10000,
   };
 }
 
@@ -2185,6 +2194,16 @@ async function addNewBomRow() {
         if (prev.matType)   payload.Material_Type = prev.matType;
         if (prev.spec)      payload.Specification = prev.spec;
         if (prev.material)  payload.Material      = prev.material;
+        // Weight_Per_Ft is dimension-independent (just the material's per-ft
+        // weight), so carry it forward immediately with the material — even
+        // before the new row's dimensions are entered. Keeps the field
+        // populated for the nesting app. See feedback_bom_weight_per_ft_blank.
+        if (prev.material) {
+          const prevMeta = materialMetaById[prev.material];
+          if (prevMeta && prevMeta.weight_per_ft) {
+            payload.Weight_Per_Ft = Math.round(prevMeta.weight_per_ft * 10000) / 10000;
+          }
+        }
         if (prev.component) payload.Component     = prev.component;
         if (prev.drawing)   payload.Scope_LU      = prev.drawing;
         if (prev.supplied)  payload.Supplied      = prev.supplied;
