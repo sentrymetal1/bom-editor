@@ -481,7 +481,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.21.0</span> — Allocation column hidden; ✕ action column narrowed (layout fitData, no more stretched empty band); new "Delete: ✓ All / ✗ None" bulk-select marks all visible rows for delete, then "Delete all marked" removes them. v2.20.1: live 1..N renumber.
+  <span id="build-tag-display">v2.21.1</span> — Table fills the width: text columns (Material, Component, Drawing, etc.) grow to fill wide screens; numeric columns + ✕ stay fixed (layout fitColumns + widthGrow). v2.21.0: Allocation hidden, bulk "Delete: ✓ All / ✗ None".
 </div>
 
 <div id="toast" class="toast"></div>
@@ -504,7 +504,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.21.0 (2026-05-28)";
+const BUILD_TAG = "v2.21.1 (2026-05-28)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1623,16 +1623,17 @@ function renderGrid() {
   table = new Tabulator('#bom-table', {
     data: bomData,
     height: 'calc(100vh - 240px)',
-    layout: 'fitData',   // size columns to content; do NOT stretch the last (frozen ✕) column to fill the screen
+    layout: 'fitColumns',   // fill the width; only text columns grow (widthGrow below), numerics + ✕ stay fixed
+    columnDefaults: { widthGrow: 0, widthShrink: 0 },   // opt-out by default: nothing grows/shrinks unless a column sets widthGrow
     virtualDom: true,
     rowHeight: 34,
     columns: [
       {title: '#',        field: 'lineItem',  width: 50,  hozAlign: 'center', frozen: true},
-      {title: 'Tag',      field: 'tag',       width: 110, frozen: true,
+      {title: 'Tag',      field: 'tag',       width: 110, frozen: true, widthGrow: 1,
         editor: 'input',
         cellEdited: makeEditHandler('BOM_Item', 'tag', {label: 'Tag'}),
         cssClass: 'editable-cell'},
-      {title: 'Component',field: 'component', width: 160,
+      {title: 'Component',field: 'component', width: 160, widthGrow: 2,
         formatter: (c) => {
           const lbl = lookupCache[LOOKUP_COMPONENT].byId[c.getValue()] || c.getRow().getData().componentLbl || '';
           return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
@@ -1643,7 +1644,7 @@ function renderGrid() {
           {dataKey: 'drawing', fieldLinkName: 'Scope_LU'},
         ], {label: 'Component'}),
         cssClass: 'editable-cell'},
-      {title: 'Drawing',  field: 'drawing',   width: 140,
+      {title: 'Drawing',  field: 'drawing',   width: 140, widthGrow: 2,
         formatter: (c) => {
           const lbl = drawingDisplayById[c.getValue()] || c.getRow().getData().drawingLbl || '';
           return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
@@ -1661,7 +1662,7 @@ function renderGrid() {
         },
         cellEdited: makeEditHandler('Scope_LU', 'drawing', {label: 'Drawing'}),
         cssClass: 'editable-cell'},
-      {title: 'Form',     field: 'formType',  width: 110,
+      {title: 'Form',     field: 'formType',  width: 110, widthGrow: 1,
         formatter: (c) => {
           const lbl = lookupCache[LOOKUP_FORM_TYPE].byId[c.getValue()] || c.getRow().getData().formTypeLbl || '';
           return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
@@ -1674,7 +1675,7 @@ function renderGrid() {
           {dataKey: 'material', fieldLinkName: 'Material'},
         ], {label: 'Form', recomputeCalcs: true}),
         cssClass: 'editable-cell'},
-      {title: 'Mat Type', field: 'matType',   width: 140,
+      {title: 'Mat Type', field: 'matType',   width: 140, widthGrow: 1,
         formatter: (c) => {
           const lbl = lookupCache[LOOKUP_MAT_TYPE].byId[c.getValue()] || c.getRow().getData().matTypeLbl || '';
           return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
@@ -1686,7 +1687,7 @@ function renderGrid() {
           {dataKey: 'material', fieldLinkName: 'Material'},
         ], {label: 'Mat Type', recomputeCalcs: true}),
         cssClass: 'editable-cell'},
-      {title: 'Spec',     field: 'spec',      width: 115,
+      {title: 'Spec',     field: 'spec',      width: 115, widthGrow: 1,
         formatter: (c) => {
           const lbl = lookupCache[LOOKUP_MFD].byId[c.getValue()] || c.getRow().getData().specLbl || '';
           return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
@@ -1706,7 +1707,7 @@ function renderGrid() {
           {dataKey: 'material', fieldLinkName: 'Material'},
         ], {label: 'Spec', recomputeCalcs: true}),
         cssClass: 'editable-cell'},
-      {title: 'Material', field: 'material',  width: 210,
+      {title: 'Material', field: 'material',  width: 210, widthGrow: 3,
         formatter: (c) => {
           const lbl = lookupCache[LOOKUP_MATERIAL].byId[c.getValue()] || c.getRow().getData().materialLbl || '';
           return lbl ? `<span class="lookup-cell">${lbl}</span>` : '';
@@ -1791,7 +1792,7 @@ function renderGrid() {
         cellEdited: makeEditHandler('Galv', 'galv', {label: 'Galv', toApi: boolToApi, skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
       {title: 'Galv LB',  field: 'galvLb',    width: 95,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
-      {title: 'Supplied', field: 'supplied',  width: 130,
+      {title: 'Supplied', field: 'supplied',  width: 130, widthGrow: 1,
         editor: 'list',
         editorParams: {values: [
           {label: 'Manufacture', value: 'Manufacture'},
@@ -1799,7 +1800,7 @@ function renderGrid() {
         ]},
         cellEdited: makeEditHandler('Supplied', 'supplied', {label: 'Supplied'}),
         cssClass: 'editable-cell'},
-      {title: 'Finish',   field: 'finish',    width: 120,
+      {title: 'Finish',   field: 'finish',    width: 120, widthGrow: 1,
         editor: 'list',
         editorParams: {values: [
           {label: 'Anodize',       value: 'Anodize'},
