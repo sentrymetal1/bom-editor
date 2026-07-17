@@ -511,7 +511,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.24.0 (2026-07-16)";
+const BUILD_TAG = "v2.24.1 (2026-07-16)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1904,11 +1904,11 @@ function renderGrid() {
       {title: 'Unit WT',  field: 'unitWt',    width: 100, hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Tot WT',   field: 'totWt',     width: 110, hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Area',     field: 'area',      width: 90,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
-      {title: 'SA',       field: 'sa',        width: 56,  minWidth: 56, hozAlign: 'center', formatter: 'tickCross',
+      {title: 'SA',       field: 'sa',        width: 64,  minWidth: 64, hozAlign: 'center', headerHozAlign: 'center', headerSort: false, formatter: 'tickCross',
         editor: autoToggleEditor,
         cellEdited: makeEditHandler('Plate_SA', 'sa', {label: 'SA', toApi: boolToApi, skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
-      {title: 'Galv',     field: 'galv',      width: 78,  minWidth: 78, hozAlign: 'center', formatter: 'tickCross',
+      {title: 'Galv',     field: 'galv',      width: 78,  minWidth: 78, hozAlign: 'center', headerHozAlign: 'center', headerSort: false, formatter: 'tickCross',
         editor: autoToggleEditor,
         cellEdited: makeEditHandler('Galv', 'galv', {label: 'Galv', toApi: boolToApi, skipRefetch: true, recomputeCalcs: true,
           afterSave: (row, rawNew) => syncFinishToGalv(row, rawNew === true || rawNew === 'true')}),
