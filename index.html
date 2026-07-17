@@ -511,7 +511,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.24.1 (2026-07-16)";
+const BUILD_TAG = "v2.24.2 (2026-07-16)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -2027,11 +2027,27 @@ document.getElementById('delete-marked').addEventListener('click', hardDeleteAll
 document.getElementById('save-project').addEventListener('click', commitChanges);
 
 document.getElementById('back').addEventListener('click', () => {
-  const url = `${PORTAL_BASE}/#Page:Project_Dashboard?project_id=${projectId}`;
+  // Match the params the project launchers use (project_id + manufacture); the
+  // dashboard resolves the project by project_id, manufacture scopes the mfg view.
+  const hash = `#Page:Project_Dashboard?project_id=${projectId}` +
+               (manufactureId ? `&manufacture=${manufactureId}` : '');
+  const url  = `${PORTAL_BASE}/${hash}`;
+  // Primary: navigate the top Creator frame directly. The widget is served
+  // same-origin when embedded, so this works (and works standalone too).
+  // navigateParentURL is tried only if direct nav is blocked, because when it
+  // exists but silently no-ops the old code never reached the fallback.
+  try {
+    if (window.top && window.top.location) {
+      window.top.location.href = url;
+      return;
+    }
+  } catch (e) {
+    console.warn('[BOM Editor] top-frame nav blocked, falling back to SDK', e);
+  }
   if (window.ZOHO?.CREATOR?.UTIL?.navigateParentURL) {
-    ZOHO.CREATOR.UTIL.navigateParentURL(`#Page:Project_Dashboard?project_id=${projectId}`);
+    ZOHO.CREATOR.UTIL.navigateParentURL(hash);
   } else {
-    window.top.location.href = url;
+    window.location.href = url;
   }
 });
 
