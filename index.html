@@ -519,7 +519,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.24.5 (2026-07-17)";
+const BUILD_TAG = "v2.24.6 (2026-07-17)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -529,6 +529,8 @@ const PORTAL_BASE         = "https://customer.materialcompassportal.com";
 
 let projectId      = null;
 let manufactureId  = null;
+let projectDescription = '';   // resolved from the project record for the Back-to-Project URL
+let clientId       = '';       // MFG_Client_Form id, ditto
 let bomData        = [];
 let table          = null;
 let currentView    = 'flat';
@@ -2041,10 +2043,14 @@ document.getElementById('delete-marked').addEventListener('click', hardDeleteAll
 document.getElementById('save-project').addEventListener('click', commitChanges);
 
 document.getElementById('back').addEventListener('click', () => {
-  // Match the params the project launchers use (project_id + manufacture); the
-  // dashboard resolves the project by project_id, manufacture scopes the mfg view.
-  const hash = `#Page:Project_Dashboard?project_id=${projectId}` +
-               (manufactureId ? `&manufacture=${manufactureId}` : '');
+  // Match the FULL param set the project launchers use — the dashboard's
+  // form-embed reads description / client_id / manufacture from the URL, so
+  // omitting them blanks Client + Project Description on arrival.
+  const parts = [`project_id=${projectId}`];
+  if (projectDescription) parts.push('description=' + encodeURIComponent(projectDescription));
+  if (clientId)           parts.push('client_id=' + clientId);
+  if (manufactureId)      parts.push('manufacture=' + manufactureId);
+  const hash = `#Page:Project_Dashboard?${parts.join('&')}`;
   const url  = `${PORTAL_BASE}/${hash}`;
   // Primary: navigate the top Creator frame directly. The widget is served
   // same-origin when embedded, so this works (and works standalone too).
@@ -2432,12 +2438,15 @@ async function setProjectHeaderText() {
       appName: APP_NAME, reportName: PROJECT_REPORT_NAME, id: projectId
     });
     const rec = resp && resp.data;
-    console.log('[BOM Editor] project header record:', rec);
     if (!rec || typeof rec !== 'object') return;
     const projName = String(rec.Project_Description || '').trim();
     const mfgName  = String(lookupDisplay(rec.MANUFACTURE) || '').trim();
     document.getElementById('header-title').textContent = projName ? ('BOM EDITOR — ' + projName) : 'BOM EDITOR';
     document.getElementById('header-sub').textContent   = mfgName || '';
+    // Capture the params the Project_Dashboard form-embed needs so Back-to-Project
+    // doesn't blank the Client / Project Description (they're driven by URL params).
+    projectDescription = projName;
+    clientId = readLookupId(rec.MFG_Client_Form) || '';
   } catch (e) {
     console.warn('[BOM Editor] project header lookup failed; keeping neutral label', e);
     document.getElementById('header-sub').textContent = '';
