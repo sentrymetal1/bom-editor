@@ -519,7 +519,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.24.4 (2026-07-17)";
+const BUILD_TAG = "v2.24.5 (2026-07-17)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -2428,13 +2428,14 @@ ZOHO.CREATOR.init().then(function() {
 // the header instead of raw record IDs. Falls back to a neutral label on error.
 async function setProjectHeaderText() {
   try {
-    const resp = await ZOHO.CREATOR.API.getAllRecords({
-      appName: APP_NAME, reportName: 'All_Projects',
-      criteria: `ID == ${projectId}`, page: 1, pageSize: 1
+    const resp = await ZOHO.CREATOR.API.getRecordById({
+      appName: APP_NAME, reportName: PROJECT_REPORT_NAME, id: projectId
     });
-    const rec = Array.isArray(resp?.data) ? resp.data[0] : null;
-    const projName = rec ? String(rec.Project_Description || '').trim() : '';
-    const mfgName  = rec ? String(lookupDisplay(rec.MANUFACTURE) || '').trim() : '';
+    const rec = resp && resp.data;
+    console.log('[BOM Editor] project header record:', rec);
+    if (!rec || typeof rec !== 'object') return;
+    const projName = String(rec.Project_Description || '').trim();
+    const mfgName  = String(lookupDisplay(rec.MANUFACTURE) || '').trim();
     document.getElementById('header-title').textContent = projName ? ('BOM EDITOR — ' + projName) : 'BOM EDITOR';
     document.getElementById('header-sub').textContent   = mfgName || '';
   } catch (e) {
