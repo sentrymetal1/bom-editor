@@ -511,7 +511,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.23.0 (2026-05-29)";
+const BUILD_TAG = "v2.24.0 (2026-07-16)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -823,6 +823,17 @@ async function commitChanges() {
   // Save without pressing Tab/Enter) before we kick the project-level recalc.
   await awaitPendingCellEdits();
 
+  // Mandatory gate: Supplied and Finish must be set on every kept row.
+  const missing = bomData.filter(r => !r.deleted && (!r.supplied || !r.finish));
+  if (missing.length) {
+    lock.classList.remove('show');
+    updateSaveButtonState();  // re-enable the button (edits still pending)
+    missing.forEach(m => { const tr = table.getRow(m.id); if (tr) flashRow(tr, 'error'); });
+    if (missing[0]) { const tr = table.getRow(missing[0].id); if (tr) table.scrollToRow(missing[0].id, 'top', false); }
+    showToast(`Cannot save — ${missing.length} row(s) missing Supplied or Finish. Fill the highlighted rows, then Save.`, 'error');
+    return;
+  }
+
   if (recentlyEdited.size === 0) {
     lock.classList.remove('show');
     updateSaveButtonState();
@@ -995,6 +1006,11 @@ function makeEditHandler(fieldLinkName, dataKey, opts) {
       updateSaveButtonState();
       flashRow(row, 'success');
       showToast(`Saved ${opts.label || fieldLinkName} on row ${data.lineItem}.`, 'success');
+      // Optional post-save hook (e.g. Galv edit cascades Finish=Galvanize).
+      if (opts.afterSave) {
+        try { await opts.afterSave(row, rawNew, data); }
+        catch (hookErr) { console.warn('[BOM Editor] afterSave hook failed', hookErr); }
+      }
     } catch (err) {
       flashRow(row, 'error');
       const detail = err?.responseText || err?.message || JSON.stringify(err);
@@ -1004,6 +1020,36 @@ function makeEditHandler(fieldLinkName, dataKey, opts) {
       pendingCells.delete(key);
     }
   };
+}
+
+// Business rule: Galv drives Finish. When Galv is turned ON, Finish is forced to
+// 'Galvanize' (and the Finish cell is locked while Galv stays on — see column def).
+// When Galv is turned OFF, a previously-forced 'Galvanize' reverts to 'Plain';
+// any other finish the user had chosen is left untouched.
+async function syncFinishToGalv(row, galvOn) {
+  const data   = row.getData();
+  const target = galvOn ? 'Galvanize'
+               : (data.finish === 'Galvanize' ? 'Plain' : data.finish);
+  if (!target || target === data.finish) return;
+  try {
+    const resp = await ZOHO.CREATOR.API.updateRecord({
+      appName: APP_NAME, reportName: REPORT_NAME, id: data.id,
+      data: { data: { Finish: target } }
+    });
+    if (!resp || (resp.code !== 3000 && !resp.result)) {
+      throw new Error('Bad response: ' + JSON.stringify(resp));
+    }
+    row.update({ finish: target });
+    row.reformat();  // re-evaluate Finish editable/lock state
+    const item = bomData.find(r => r.id === data.id);
+    if (item) item.finish = target;
+    recentlyEdited.add(data.id);
+    updateSaveButtonState();
+  } catch (err) {
+    showToast('Galv set, but auto-updating Finish failed: ' +
+      (err.message || JSON.stringify(err)), 'error');
+    console.error('[BOM Editor] syncFinishToGalv failed', err);
+  }
 }
 
 function makeCascadeEditHandler(fieldLinkName, dataKey, downstream, opts) {
@@ -1601,16 +1647,59 @@ async function loadBOM() {
               : [];
 
     bomData = rows.map(mapRecord).sort((a, b) => a.lineItem - b.lineItem);
+    // Backfill mandatory Supplied/Finish on rows imported before these defaults
+    // existed. Fills BLANKS only (never overrides a chosen value), in-memory first
+    // so the grid renders populated, then persists them one time in the background.
+    const backfilled = applySuppliedFinishDefaults(bomData);
     renumberRows();   // collapse any gaps from previously-deleted rows -> 1..N
 
     document.getElementById('loading').style.display = 'none';
     document.getElementById('bom-table').style.display = 'block';
     renderGrid();
+    if (backfilled.length) persistBackfill(backfilled);
     preloadCombosFromBOM().catch(err => console.error('[BOM Editor] preloadCombosFromBOM failed:', err));
     preloadDrawingsFromBOM().catch(err => console.error('[BOM Editor] preloadDrawingsFromBOM failed:', err));
   } catch (err) {
     showError('Failed to load BOM rows.', err);
   }
+}
+
+// Fill blank Supplied/Finish in-memory (Supplied->Manufacture; Finish->Galvanize
+// if Galv else Plain). BLANKS ONLY — never overrides a value the estimator chose.
+// Returns [{id, patch}] for the rows that changed, so they can be persisted once.
+function applySuppliedFinishDefaults(rows) {
+  const patched = [];
+  rows.forEach(r => {
+    if (r.deleted) return;
+    const patch = {};
+    if (!r.supplied) { r.supplied = 'Manufacture'; patch.Supplied = 'Manufacture'; }
+    if (!r.finish)   { const f = r.galv ? 'Galvanize' : 'Plain'; r.finish = f; patch.Finish = f; }
+    if (Object.keys(patch).length) patched.push({ id: r.id, patch });
+  });
+  return patched;
+}
+
+// One-time background persist of the load-time backfill (concurrency-capped so it
+// doesn't spike Zoho calls). After it runs once for a project, later loads find no
+// blanks and do nothing.
+async function persistBackfill(list) {
+  const CONCURRENCY = 3;
+  let i = 0, ok = 0;
+  async function worker() {
+    while (i < list.length) {
+      const { id, patch } = list[i++];
+      try {
+        await ZOHO.CREATOR.API.updateRecord({
+          appName: APP_NAME, reportName: REPORT_NAME, id, data: { data: patch }
+        });
+        ok++;
+      } catch (err) {
+        console.error('[BOM Editor] backfill persist failed for', id, err);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+  if (ok) showToast(`Defaulted ${ok} blank Supplied/Finish value(s) and saved to project.`, 'success');
 }
 
 function updateStats() {
@@ -1815,13 +1904,14 @@ function renderGrid() {
       {title: 'Unit WT',  field: 'unitWt',    width: 100, hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Tot WT',   field: 'totWt',     width: 110, hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Area',     field: 'area',      width: 90,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
-      {title: 'SA',       field: 'sa',        width: 45,  hozAlign: 'center', formatter: 'tickCross',
+      {title: 'SA',       field: 'sa',        width: 56,  minWidth: 56, hozAlign: 'center', formatter: 'tickCross',
         editor: autoToggleEditor,
         cellEdited: makeEditHandler('Plate_SA', 'sa', {label: 'SA', toApi: boolToApi, skipRefetch: true, recomputeCalcs: true}),
         cssClass: 'editable-cell'},
-      {title: 'Galv',     field: 'galv',      width: 65,  hozAlign: 'center', formatter: 'tickCross',
+      {title: 'Galv',     field: 'galv',      width: 78,  minWidth: 78, hozAlign: 'center', formatter: 'tickCross',
         editor: autoToggleEditor,
-        cellEdited: makeEditHandler('Galv', 'galv', {label: 'Galv', toApi: boolToApi, skipRefetch: true, recomputeCalcs: true}),
+        cellEdited: makeEditHandler('Galv', 'galv', {label: 'Galv', toApi: boolToApi, skipRefetch: true, recomputeCalcs: true,
+          afterSave: (row, rawNew) => syncFinishToGalv(row, rawNew === true || rawNew === 'true')}),
         cssClass: 'editable-cell'},
       {title: 'Galv LB',  field: 'galvLb',    width: 95,  hozAlign: 'right', formatter: (c) => `<span class="calc-cell">${(c.getValue()||0).toFixed(2)}</span>`},
       {title: 'Supplied', field: 'supplied',  width: 130, widthGrow: 1,
@@ -1833,6 +1923,8 @@ function renderGrid() {
         cellEdited: makeEditHandler('Supplied', 'supplied', {label: 'Supplied'}),
         cssClass: 'editable-cell'},
       {title: 'Finish',   field: 'finish',    width: 120, widthGrow: 1,
+        // Locked to 'Galvanize' while Galv is on (Galv drives Finish). Editable otherwise.
+        editable: (cell) => !cell.getData().galv,
         editor: 'list',
         editorParams: {values: [
           {label: 'Anodize',       value: 'Anodize'},
@@ -1844,9 +1936,14 @@ function renderGrid() {
           {label: 'Powder Coat',   value: 'Powder Coat'},
         ]},
         cellEdited: makeEditHandler('Finish', 'finish', {label: 'Finish'}),
+        formatter: (cell) => {
+          const d = cell.getData();
+          const v = cell.getValue() || '';
+          return d.galv ? `<span title="Locked — Galv is Yes">🔒 ${v}</span>` : v;
+        },
         cssClass: 'editable-cell'},
       {title: 'Allocated',field: 'allocatedAmt', visible: false, width: 105, hozAlign: 'right', formatter: (c) => `$${(c.getValue()||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`},
-      {title: 'DELETE', field: 'deleted', width: 56, minWidth: 56, hozAlign: 'center', headerHozAlign: 'center', headerSort: false, frozen: true, resizable: false,
+      {title: 'DELETE', field: 'deleted', width: 82, minWidth: 82, hozAlign: 'center', headerHozAlign: 'center', headerSort: false, frozen: true, resizable: false,
         formatter: (cell) => {
           const d = cell.getData();
           return d.deleted
@@ -1946,7 +2043,13 @@ document.querySelectorAll('.btn-bulk').forEach(b => {
     const field = b.dataset.bulkField;
     const value = b.dataset.bulkValue === 'true' ? true : b.dataset.bulkValue === 'false' ? false : b.dataset.bulkValue;
     if (field === 'sa')     bulkApplyField('Plate_SA', 'sa',   value, 'SA',   boolToApi);
-    if (field === 'galv')   bulkApplyField('Galv',     'galv', value, 'Galv', boolToApi);
+    if (field === 'galv')   bulkApplyField('Galv', 'galv', value, 'Galv', boolToApi).then(applied => {
+      // Galv drives Finish: ON -> force Finish=Galvanize on the same rows;
+      // OFF -> revert only the rows that were 'Galvanize' back to 'Plain'.
+      if (applied === false) return;
+      if (value === true) bulkApplyField('Finish', 'finish', 'Galvanize', 'Finish', null, {silent: true});
+      else                bulkApplyField('Finish', 'finish', 'Plain',     'Finish', null, {silent: true, rowFilter: d => d.finish === 'Galvanize'});
+    });
     if (field === 'delete') markAllFiltered(value);
   });
 });
@@ -1956,7 +2059,8 @@ document.querySelectorAll('.bulk-select').forEach(sel => {
     if (!v) return;
     const field = sel.dataset.bulkField;
     if (field === 'supplied') bulkApplyField('Supplied', 'supplied', v, 'Supplied');
-    if (field === 'finish')   bulkApplyField('Finish',   'finish',   v, 'Finish');
+    // Finish is locked to Galvanize on Galv rows — bulk-set only touches non-galv rows.
+    if (field === 'finish')   bulkApplyField('Finish',   'finish',   v, 'Finish', null, {rowFilter: d => !d.galv});
     sel.value = '';  // reset the dropdown so user can re-trigger if needed
   });
 });
@@ -2096,14 +2200,18 @@ async function hardDeleteAllMarked() {
 
 // Bulk-apply a single field's value to all currently-filtered (visible) rows.
 // Uses individual updateRecord calls with concurrency cap (avoid Zoho rate-limit).
-async function bulkApplyField(fieldLinkName, dataKey, newValue, displayLabel, toApi) {
-  if (!table) return;
-  const visibleRows = table.getRows('active');  // 'active' = passes current filter
+async function bulkApplyField(fieldLinkName, dataKey, newValue, displayLabel, toApi, opts) {
+  opts = opts || {};
+  if (!table) return false;
+  let visibleRows = table.getRows('active');  // 'active' = passes current filter
+  // Optional row filter (e.g. Galv-off cascade only reverts rows currently 'Galvanize').
+  if (opts.rowFilter) visibleRows = visibleRows.filter(r => opts.rowFilter(r.getData()));
   if (visibleRows.length === 0) {
-    showToast('No visible rows to update.', 'error');
-    return;
+    if (!opts.silent) showToast('No visible rows to update.', 'error');
+    return false;
   }
-  if (!(await customConfirm(`Set ${displayLabel} to "${newValue}" for ${visibleRows.length} visible row(s)? Changes save immediately.`, {title: 'Bulk apply', okText: 'Apply'}))) return;
+  // silent = cascade call (e.g. Galv already confirmed) — skip the extra confirm.
+  if (!opts.silent && !(await customConfirm(`Set ${displayLabel} to "${newValue}" for ${visibleRows.length} visible row(s)? Changes save immediately.`, {title: 'Bulk apply', okText: 'Apply'}))) return false;
 
   const apiValue = toApi ? toApi(newValue) : newValue;
   showToast(`Updating ${visibleRows.length} row(s)…`, 'success');
@@ -2162,11 +2270,15 @@ async function bulkApplyField(fieldLinkName, dataKey, newValue, displayLabel, to
   await Promise.all(Array.from({length: CONCURRENCY}, () => worker()));
   updateStats();
   updateSaveButtonState();
-  if (failed === 0) {
+  if (opts.silent) {
+    // cascade call — stay quiet unless something failed
+    if (failed) showToast(`Finish cascade: ${ok} ok, ${failed} failed. Check console.`, 'error');
+  } else if (failed === 0) {
     showToast(`Bulk update done: ${ok} row(s) updated.`, 'success');
   } else {
     showToast(`Bulk update: ${ok} succeeded, ${failed} failed. Check console.`, 'error');
   }
+  return failed === 0;
 }
 
 async function addNewBomRow() {
@@ -2185,6 +2297,10 @@ async function addNewBomRow() {
       // bi-directional field on Project_Material_Allocated_Detail_Form.
       Bi_Directional_Project_ID: projectId,
       Line_Item: nextLineItem,
+      // Mandatory-field defaults. New rows start non-galv, so Finish defaults to
+      // 'Plain'; carry-forward below overrides these if the last row had values.
+      Supplied: 'Manufacture',
+      Finish: 'Plain',
     };
     // Carry-forward from last-added row's CURRENT state — saves re-picking material every add.
     if (lastAddedRowId) {
