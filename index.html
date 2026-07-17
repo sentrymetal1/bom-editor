@@ -419,6 +419,14 @@
       <div class="val" id="stat-weight">—</div>
     </div>
     <div class="stat">
+      <div class="label">Surface Area</div>
+      <div class="val" id="stat-area">—</div>
+    </div>
+    <div class="stat">
+      <div class="label">Galv Weight</div>
+      <div class="val" id="stat-galv">—</div>
+    </div>
+    <div class="stat">
       <div class="label">Allocated $</div>
       <div class="val" id="stat-dollars">—</div>
     </div>
@@ -511,7 +519,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.24.2 (2026-07-16)";
+const BUILD_TAG = "v2.24.3 (2026-07-17)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1703,10 +1711,16 @@ async function persistBackfill(list) {
 }
 
 function updateStats() {
-  document.getElementById('stat-rows').textContent = bomData.length;
-  const totalWt    = bomData.reduce((s,r) => s + (r.totWt || 0), 0);
-  const totalAlloc = bomData.reduce((s,r) => s + (r.allocatedAmt || 0), 0);
+  // Totals reflect the rows that will REMAIN — exclude soft-deleted rows.
+  const kept = bomData.filter(r => !r.deleted);
+  document.getElementById('stat-rows').textContent = kept.length;
+  const totalWt    = kept.reduce((s,r) => s + (r.totWt   || 0), 0);
+  const totalArea  = kept.reduce((s,r) => s + (r.area    || 0), 0);
+  const totalGalv  = kept.reduce((s,r) => s + (r.galvLb  || 0), 0);
+  const totalAlloc = kept.reduce((s,r) => s + (r.allocatedAmt || 0), 0);
   document.getElementById('stat-weight').textContent  = Math.round(totalWt).toLocaleString() + ' lbs';
+  document.getElementById('stat-area').textContent    = totalArea.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) + ' ft²';
+  document.getElementById('stat-galv').textContent    = Math.round(totalGalv).toLocaleString() + ' lbs';
   document.getElementById('stat-dollars').textContent = '$' + totalAlloc.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
 }
 
