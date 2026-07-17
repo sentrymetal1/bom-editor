@@ -519,7 +519,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.24.3 (2026-07-17)";
+const BUILD_TAG = "v2.24.4 (2026-07-17)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -2412,14 +2412,36 @@ ZOHO.CREATOR.init().then(function() {
     return;
   }
 
-  document.getElementById('header-title').textContent = 'BOM EDITOR — Project ' + projectId;
-  document.getElementById('header-sub').textContent =
-    manufactureId ? ('Manufacture ID: ' + manufactureId) : 'No Manufacture ID in URL';
+  // Start with neutral text (no raw IDs), then upgrade to the project + mfg
+  // NAMES once the lookup resolves.
+  document.getElementById('header-title').textContent = 'BOM EDITOR';
+  document.getElementById('header-sub').textContent   = 'Loading project…';
+  setProjectHeaderText();
 
   loadBOM();
 }).catch(function(err) {
   showError('ZOHO.CREATOR.init() failed.', err);
 });
+
+// Resolve the project name (Project_Description) and manufacturer name
+// (MANUFACTURE lookup display) from the All_Projects report, and show those in
+// the header instead of raw record IDs. Falls back to a neutral label on error.
+async function setProjectHeaderText() {
+  try {
+    const resp = await ZOHO.CREATOR.API.getAllRecords({
+      appName: APP_NAME, reportName: 'All_Projects',
+      criteria: `ID == ${projectId}`, page: 1, pageSize: 1
+    });
+    const rec = Array.isArray(resp?.data) ? resp.data[0] : null;
+    const projName = rec ? String(rec.Project_Description || '').trim() : '';
+    const mfgName  = rec ? String(lookupDisplay(rec.MANUFACTURE) || '').trim() : '';
+    document.getElementById('header-title').textContent = projName ? ('BOM EDITOR — ' + projName) : 'BOM EDITOR';
+    document.getElementById('header-sub').textContent   = mfgName || '';
+  } catch (e) {
+    console.warn('[BOM Editor] project header lookup failed; keeping neutral label', e);
+    document.getElementById('header-sub').textContent = '';
+  }
+}
 </script>
 
 </body>
