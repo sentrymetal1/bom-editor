@@ -519,7 +519,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.24.6 (2026-07-17)";
+const BUILD_TAG = "v2.24.7 (2026-07-20)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -1670,8 +1670,31 @@ async function loadBOM() {
     preloadCombosFromBOM().catch(err => console.error('[BOM Editor] preloadCombosFromBOM failed:', err));
     preloadDrawingsFromBOM().catch(err => console.error('[BOM Editor] preloadDrawingsFromBOM failed:', err));
   } catch (err) {
-    showError('Failed to load BOM rows.', err);
+    // Zoho throws 404 / code 3100 ("No records found for the given criteria")
+    // when zero rows match — an EMPTY BOM, not a failure. Happens on a brand-new
+    // project, or after an import wiped/failed and left no rows. Render an empty
+    // editable grid so the estimator can Add Row instead of hitting a dead end.
+    if (isNoRecordsError(err)) {
+      bomData = [];
+      try { await loadLookups(); }
+      catch (luErr) { console.error('[BOM Editor] loadLookups failed on empty BOM:', luErr); }
+      renumberRows();
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('bom-table').style.display = 'block';
+      renderGrid();
+    } else {
+      showError('Failed to load BOM rows.', err);
+    }
   }
+}
+
+// True when Zoho's getAllRecords rejected simply because nothing matched the
+// criteria (empty result), vs. a real transport/permission failure.
+function isNoRecordsError(err) {
+  if (!err) return false;
+  if (err.status === 404 || err.code === 3100) return true;
+  const raw = String(err.responseText || err.message || err);
+  return raw.indexOf('"code":3100') !== -1 || raw.indexOf('No records found') !== -1;
 }
 
 // Fill blank Supplied/Finish in-memory (Supplied->Manufacture; Finish->Galvanize
