@@ -435,7 +435,7 @@
 
 <div class="toolbar">
   <button class="btn btn-ghost" id="back">← Back to Project</button>
-  <button class="btn btn-ghost" id="add-row" title="Add a new BOM row at top, carrying forward Form / Mat Type / Spec / Material / Component / Drawing / Supplied / Finish from your last added row">+ Add Row</button>
+  <button class="btn btn-ghost" id="add-row" title="Add a new BOM row at the bottom, carrying forward Form / Mat Type / Spec / Material / Component / Drawing / Supplied / Finish from your last added row">+ Add Row</button>
   <select id="view-mode" class="view-select" title="Group rows by Tag prefix, Form Type, or Component">
     <option value="flat">View: Flat</option>
     <option value="tag">Group by Tag</option>
@@ -519,7 +519,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.24.7 (2026-07-20)";
+const BUILD_TAG = "v2.25.0 (2026-08-07)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 
 const APP_NAME            = "type-formsheet-2-18-21";
@@ -2408,20 +2408,20 @@ async function addNewBomRow() {
       throw new Error('addRecord response missing record ID: ' + JSON.stringify(resp));
     }
     const newRow = mapRecord(newRecord, nextLineItem - 1);
-    bomData.unshift(newRow);  // top of bomData
+    bomData.push(newRow);  // bottom of bomData
     if (table) {
-      table.addRow(newRow, true);  // true = add to TOP
-      table.scrollToRow(newRow.id, 'top', false);
+      table.addRow(newRow, false);  // false = add to BOTTOM
+      table.scrollToRow(newRow.id, 'bottom', false);
     }
     lastAddedRowId = newRow.id;
     recentlyEdited.add(newRow.id);
-    renumberRows();   // new row is at top -> becomes #1, push the rest down
+    renumberRows();   // new row is at bottom -> takes the next # ; existing rows keep theirs
     updateStats();
     updateSaveButtonState();
     const carriedNote = lastAddedRowId && bomData.find(r => r.id === lastAddedRowId && (r.formType || r.material))
       ? ' (carried Form/Mat/Spec/Material from previous add — fill in Tag + dimensions)'
       : ' — fill in Tag / Form / Mat Type / etc.';
-    showToast(`Added new row at top${carriedNote}`, 'success');
+    showToast(`Added new row at bottom${carriedNote}`, 'success');
   } catch (err) {
     showToast('Add row failed: ' + (err.message || JSON.stringify(err)), 'error');
     console.error('[BOM Editor] addRecord failed', err);
