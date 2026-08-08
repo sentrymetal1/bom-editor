@@ -496,7 +496,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.25.1</span> — Add Row now appends at the BOTTOM and takes the next number; existing rows keep theirs. v2.23.0: view-only ✓ checklist column (first column) to check off rows verified against the drawing; checked rows tint green (not saved to Zoho).
+  <span id="build-tag-display">v2.26.0</span> — Rows you add but leave blank (no material, or qty 0) are now caught on Save or Back to Project: discard them, or go back and finish. v2.25.0: Add Row appends at the BOTTOM and takes the next number; existing rows keep theirs.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -519,7 +519,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.25.1 (2026-08-08)";
+const BUILD_TAG = "v2.26.0 (2026-08-08)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 // The footer used to carry its own hardcoded version and drifted two releases
 // behind BUILD_TAG, which reads as "the deploy didn't work". Drive it from the
@@ -850,6 +850,16 @@ async function commitChanges() {
     showToast(`Cannot save — ${missing.length} row(s) missing Supplied or Finish. Fill the highlighted rows, then Save.`, 'error');
     return;
   }
+
+  // Blank rows added this session — discard, or go back and finish them. Runs
+  // before the commit because saving is what kicks the project-level recalc
+  // that they break. Drop the grid lock first or the modal sits behind it.
+  lock.classList.remove('show');
+  if (!(await resolveIncompleteNewRows('save'))) {
+    updateSaveButtonState();
+    return;
+  }
+  lock.classList.add('show');
 
   if (recentlyEdited.size === 0) {
     lock.classList.remove('show');
@@ -2072,7 +2082,11 @@ document.getElementById('delete-marked').addEventListener('click', hardDeleteAll
 
 document.getElementById('save-project').addEventListener('click', commitChanges);
 
-document.getElementById('back').addEventListener('click', () => {
+document.getElementById('back').addEventListener('click', async () => {
+  // Walking away from a blank row you just added is how the project form ends
+  // up throwing on its next save. Offer to discard before navigating.
+  if (!(await resolveIncompleteNewRows('leave'))) return;
+
   // Match the FULL param set the project launchers use — the dashboard's
   // form-embed reads description / client_id / manufacture from the URL, so
   // omitting them blanks Client + Project Description on arrival.
@@ -2160,6 +2174,76 @@ function markAllFiltered(makeDeleted) {
 // forward its classification fields (Form / Mat Type / Spec / Material / Component /
 // Drawing / Supplied / Finish). Dimensions + Tag + QTY stay blank.
 let lastAddedRowId = null;
+
+// Rows created by "+ Add Row" during THIS session. A row is inserted into Zoho
+// the instant it is added, so one the estimator abandons half-filled is a real
+// record — and a blank one is not harmless: the project form's success stack
+// divides by Quantity and sums over matching BOM rows, so a row with no
+// material or qty 0 throws "Null value occurred while performing Addition
+// operation" and takes the whole save down with it.
+// Scoped to this session on purpose: pre-existing incomplete rows are the
+// estimator's own business, not something to nag about on every visit.
+const sessionAddedRowIds = new Set();
+
+function getIncompleteNewRows() {
+  return bomData.filter(r =>
+    sessionAddedRowIds.has(r.id) && !r.deleted && (!r.material || !(r.qty > 0))
+  );
+}
+
+// Returns true when it is safe to continue — either nothing is blank, or the
+// user chose to discard and every delete succeeded. Returns false when the user
+// wants to keep editing, OR when a delete was rejected (a survivor is exactly
+// the row that breaks the project form, so never wave it through).
+async function resolveIncompleteNewRows(actionLabel) {
+  const blanks = getIncompleteNewRows();
+  if (!blanks.length) return true;
+
+  blanks.forEach(b => { const tr = table.getRow(b.id); if (tr) flashRow(tr, 'error'); });
+  table.scrollToRow(blanks[0].id, 'top', false);
+
+  const lines = blanks.map(b => '#' + b.lineItem).join(', ');
+  const ok = await customConfirm(
+    `${blanks.length} row(s) you added are still blank — ${lines}. ` +
+    `A row with no material, or a quantity of 0, breaks the project's totals. ` +
+    `Discard them and ${actionLabel}, or go back and finish filling them in?`,
+    {title: 'Blank rows', okText: 'Discard blank rows', cancelText: 'Go back and finish'}
+  );
+  if (!ok) return false;
+
+  let failed = 0;
+  for (const b of blanks) {
+    try {
+      // deleteRecord takes `criteria`, not `id` — same as hardDeleteRow.
+      const resp = await ZOHO.CREATOR.API.deleteRecord({
+        appName:    APP_NAME,
+        reportName: REPORT_NAME,
+        criteria:   `ID == ${b.id}`,
+      });
+      if (!resp || (resp.code !== 3000 && !resp.result)) {
+        throw new Error('Bad deleteRecord response: ' + JSON.stringify(resp));
+      }
+      const idx = bomData.findIndex(r => r.id === b.id);
+      if (idx >= 0) bomData.splice(idx, 1);
+      recentlyEdited.delete(b.id);
+      sessionAddedRowIds.delete(b.id);
+      const tr = table.getRow(b.id);
+      if (tr) tr.delete();
+    } catch (err) {
+      failed++;
+      console.error('[BOM Editor] discard blank row failed', b.id, err);
+    }
+  }
+  renumberRows();
+  updateStats();
+  updateSaveButtonState();
+  if (failed) {
+    showToast(`Discarded ${blanks.length - failed} of ${blanks.length} blank row(s) — ${failed} could not be deleted. Remove them manually before saving.`, 'error');
+    return false;
+  }
+  showToast(`Discarded ${blanks.length} blank row(s).`, 'success');
+  return true;
+}
 
 async function hardDeleteRow(row) {
   const data = row.getData();
@@ -2421,6 +2505,7 @@ async function addNewBomRow() {
       table.scrollToRow(newRow.id, 'bottom', false);
     }
     lastAddedRowId = newRow.id;
+    sessionAddedRowIds.add(newRow.id);
     recentlyEdited.add(newRow.id);
     renumberRows();   // new row is at bottom -> takes the next # ; existing rows keep theirs
     updateStats();
