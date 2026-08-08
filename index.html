@@ -496,7 +496,7 @@
 <div id="bom-table" style="display:none;"></div>
 
 <div class="footer-note">
-  <span id="build-tag-display">v2.26.0</span> — Rows you add but leave blank (no material, or qty 0) are now caught on Save or Back to Project: discard them, or go back and finish. v2.25.0: Add Row appends at the BOTTOM and takes the next number; existing rows keep theirs.
+  <span id="build-tag-display">v2.26.1</span> — Rows you add but leave blank (no material, or qty 0) are now caught on Save or Back to Project: discard them, or go back and finish. v2.25.0: Add Row appends at the BOTTOM and takes the next number; existing rows keep theirs.
 </div>
 
 <div id="toast" class="toast"></div>
@@ -519,7 +519,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.26.0 (2026-08-08)";
+const BUILD_TAG = "v2.26.1 (2026-08-08)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 // The footer used to carry its own hardcoded version and drifted two releases
 // behind BUILD_TAG, which reads as "the deploy didn't work". Drive it from the
@@ -2186,9 +2186,16 @@ let lastAddedRowId = null;
 const sessionAddedRowIds = new Set();
 
 function getIncompleteNewRows() {
-  return bomData.filter(r =>
-    sessionAddedRowIds.has(r.id) && !r.deleted && (!r.material || !(r.qty > 0))
+  // Total weight is the reliable signal. Add Row carries Form/Mat/Spec/Material
+  // forward from the last add, so "has a material" proves nothing — a row can
+  // look populated and still have no tag, no dimensions and zero weight. A real
+  // BOM line always ends up with a weight; an abandoned one never does.
+  const rows = bomData.filter(r =>
+    sessionAddedRowIds.has(r.id) && !r.deleted &&
+    (!r.material || !(r.qty > 0) || !(r.totWt > 0) || !r.tag)
   );
+  console.log('[BOM Editor] incomplete new rows:', rows.length, 'of', sessionAddedRowIds.size, 'added this session', rows);
+  return rows;
 }
 
 // Returns true when it is safe to continue — either nothing is blank, or the
