@@ -526,7 +526,7 @@
 </div>
 
 <script>
-const BUILD_TAG = "v2.27.0 (2026-08-21)";
+const BUILD_TAG = "v2.28.0 (2026-10-12)";
 console.log('[BOM Editor] build:', BUILD_TAG);
 // The footer used to carry its own hardcoded version and drifted two releases
 // behind BUILD_TAG, which reads as "the deploy didn't work". Drive it from the
@@ -1432,14 +1432,20 @@ async function loadOneLookup(reportName) {
   cache.optionsList.sort((a, b) => a.label.localeCompare(b.label, undefined, {numeric: true}));
 }
 
+// Zoho caps a page at 200, so ask for exactly 200 and keep going while pages come back full.
+// (Asking for 1000 got 200 back, read as "last page", and stopped. A single 200 read showed
+// Amrize as 200 rows / 2,418 lb of its 530 rows, 2026-10-12.) Zoho answers a page past the end
+// with an error instead of an empty list, so a failure after page 1 means "done".
 async function fetchAllPages(reportName, criteria) {
   const all = [];
   let page = 1;
-  const pageSize = 1000;
+  const pageSize = 200;
   while (true) {
     const params = { appName: APP_NAME, reportName: reportName, page: page, pageSize: pageSize };
     if (criteria) params.criteria = criteria;
-    const resp = await ZOHO.CREATOR.API.getAllRecords(params);
+    let resp;
+    try { resp = await ZOHO.CREATOR.API.getAllRecords(params); }
+    catch (e) { if (page > 1) break; throw e; }
     const rows = Array.isArray(resp?.data) ? resp.data : Array.isArray(resp) ? resp : [];
     if (rows.length === 0) break;
     all.push(...rows);
@@ -1839,19 +1845,10 @@ async function preloadCombosFromBOM() {
 
 async function loadBOM() {
   try {
-    const [resp] = await Promise.all([
-      ZOHO.CREATOR.API.getAllRecords({
-        appName:    APP_NAME,
-        reportName: REPORT_NAME,
-        criteria:   `MCP_Customer_Project_Form == ${projectId}`,
-        pageSize:   200
-      }),
+    const [rows] = await Promise.all([
+      fetchAllPages(REPORT_NAME, `MCP_Customer_Project_Form == ${projectId}`),
       loadLookups()
     ]);
-
-    const rows = Array.isArray(resp?.data) ? resp.data
-              : Array.isArray(resp)        ? resp
-              : [];
 
     bomData = rows.map(mapRecord).sort((a, b) => a.lineItem - b.lineItem);
     // Backfill mandatory Supplied/Finish on rows imported before these defaults
